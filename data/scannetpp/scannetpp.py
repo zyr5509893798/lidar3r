@@ -41,6 +41,7 @@ class ScanNetPPData():
         # Remove scenes that have frames with no valid depths
         logger.info(f"Removing scenes that have frames with no valid depths: {bad_scenes}")
         self.sequences = [s for s in self.sequences if s not in bad_scenes]
+        # sequences：序列名构成的集合（去掉不合适的序列）
 
         P = np.array([
             [1, 0, 0, 0],

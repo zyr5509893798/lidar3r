@@ -62,36 +62,66 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
         self.beta = beta
 
     def __getitem__(self, idx):
-
+        # 返回views，这里面都是真数据而不是路径和id，结构：
+        # views = {
+        #   "context": [
+        #       {
+        #             'original_img': rgb_image,
+        #             'img': 处理后的图像,
+        #             'pts3d': 每个像素位置在世界坐标系下的三维点云,
+        #             'valid_mask': 点云有效性掩码,
+        #             'depthmap': depthmap,
+        #             'camera_pose': c2w,
+        #             'camera_intrinsics': intrinsics,
+        #             'dataset': 'scannet++',
+        #             'label': f"scannet++/{sequence}",
+        #             'instance': f'{view_idx}',
+        #             'is_metric_scale': True,
+        #             'sky_mask': depthmap <= 0.0,
+        #         }, {……} ], 一共两个，图一图二
+        #   "target": [{
+        #             'original_img': rgb_image,
+        #             'depthmap': depthmap,
+        #             'camera_pose': c2w,
+        #             'camera_intrinsics': intrinsics,
+        #             'dataset': 'scannet++',
+        #             'label': f"scannet++/{sequence}",
+        #             'instance': f'{view_idx}',
+        #             'is_metric_scale': True,
+        #             'sky_mask': depthmap <= 0.0,
+        #         }, ……],
+        #   "scene": sequence}
         sequence = self.data.sequences[idx // self.num_epochs_per_epoch]
         sequence_length = len(self.data.color_paths[sequence])
-
+        # 确定序列id之后，选择图1，图2，对照测试图
         context_views, target_views = self.sample(sequence, self.num_target_views, self.alpha, self.beta)
 
         views = {"context": [], "target": [], "scene": sequence}
 
         # Fetch the context views
         for c_view in context_views:
-
+            # 图1和图2需要取出图像处理，取出深度图得到对应的世界坐标系下的三维点云和有效性掩码，把这些放入context
             assert c_view < sequence_length, f"Invalid view index: {c_view}, sequence length: {sequence_length}, c_views: {context_views}"
 
-            view = self.data.get_view(sequence, c_view, self.resolution)
+            view = self.data.get_view(sequence, c_view, self.resolution) # 从各种路径和id中取真实的这一帧的图像，深度图，ctw等
 
             # Transform the input
-            view['img'] = self.transform(view['original_img'])
+            view['img'] = self.transform(view['original_img']) # 图像转换
             view['original_img'] = self.org_transform(view['original_img'])
 
             # Create the point cloud and validity mask
+            # pts3d：世界坐标系下的点云图，每个像素对应一个xyz，HxWx3
+            # valid_mask：每个像素位置的点是否有效
             pts3d, valid_mask = depthmap_to_absolute_camera_coordinates(**view)
             view['pts3d'] = pts3d
-            view['valid_mask'] = valid_mask & np.isfinite(pts3d).all(axis=-1)
+            view['valid_mask'] = valid_mask & np.isfinite(pts3d).all(axis=-1)  # 确保一个点的所有坐标均有限，得到 HxW 掩码。
             assert view['valid_mask'].any(), f"Invalid mask for sequence: {sequence}, view: {c_view}"
 
             views['context'].append(view)
 
         # Fetch the target views
         for t_view in target_views:
-
+            # 参照图像只需要对原图进行简单处理。
             view = self.data.get_view(sequence, t_view, self.resolution)
             view['original_img'] = self.org_transform(view['original_img'])
             views['target'].append(view)
@@ -104,7 +134,7 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
 
     def sample(self, sequence, num_target_views, context_overlap_threshold=0.5, target_overlap_threshold=0.6):
 
-        first_context_view = random.randint(0, len(self.data.color_paths[sequence]) - 1)
+        first_context_view = random.randint(0, len(self.data.color_paths[sequence]) - 1) # 随便选图1
 
         # Pick a second context view that has sufficient overlap with the first context view
         valid_second_context_views = []
@@ -112,13 +142,15 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
             if frame == first_context_view:
                 continue
             overlap = self.coverage[sequence][first_context_view][frame]
+            # coverage[sequence]帧间重叠度矩阵，通过 coverage[sequence][i][j] 可直接访问帧 i 和帧 j 的重叠度。
             if overlap > context_overlap_threshold:
                 valid_second_context_views.append(frame)
-        if len(valid_second_context_views) > 0:
+                # 将所有重叠度满足要求的帧加入候选序列
+        if len(valid_second_context_views) > 0: # 从所有满足要求的帧中随机选择一个作为图2
             second_context_view = random.choice(valid_second_context_views)
 
         # If there are no valid second context views, pick the best one
-        else:
+        else: # 没满足要求的，选最好的一个
             best_view = None
             best_overlap = None
             for frame in range(len(self.data.color_paths[sequence])):
@@ -131,11 +163,11 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
             second_context_view = best_view
 
         # Pick the target views
-        valid_target_views = []
+        valid_target_views = []  # 在同一个序列中选择测试帧，用于最终的对照
         for frame in range(len(self.data.color_paths[sequence])):
             if frame == first_context_view or frame == second_context_view:
                 continue
-            overlap_max = max(
+            overlap_max = max(   # 测试帧要与至少一个输入图有一定的重合度
                 self.coverage[sequence][first_context_view][frame],
                 self.coverage[sequence][second_context_view][frame]
             )
@@ -145,7 +177,7 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
             target_views = random.sample(valid_target_views, num_target_views)
 
         # If there are not enough valid target views, pick the best ones
-        else:
+        else:   # 没有符合要求的就选最合适的。
             overlaps = []
             for frame in range(len(self.data.color_paths[sequence])):
                 if frame == first_context_view or frame == second_context_view:

@@ -147,7 +147,7 @@ class AsymmetricCroCo3DStereo (
         return out, out2, pos, pos2
 
     def _encode_symmetrized(self, view1, view2):
-        img1 = view1['img']
+        img1 = view1['img']  # B C H W dataloader对的item整合进行到了字典的img层，所以这里是BCHW
         img2 = view2['img']
         B = img1.shape[0]
         # Recover true_shape when available, otherwise assume that the img shape is the true one
