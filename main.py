@@ -122,6 +122,11 @@ class MAST3RGaussians(L.LightningModule):
         color, _ = self.decoder(batch, pred1, pred2, (h, w))
 
         # Calculate losses
+        # loss掩码，确定哪些像素点参与loss计算
+        # 计算第一组视图（depth_1）中的哪些像素点，在3D空间中投影到第二组视图（depth_2）时满足三个条件：
+        # 1 在第二组视图的视锥（frustum）内
+        # 2 第一组视图中的深度值有效（非零）
+        # 3 投影后的深度与第二组视图的实际深度匹配（允许微小误差）
         mask = loss_mask.calculate_loss_mask(batch)
         loss, mse, lpips = self.calculate_loss(
             batch, view1, view2, pred1, pred2, color, mask,
