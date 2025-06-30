@@ -5,7 +5,9 @@ import os
 import sys
 from pathlib import Path
 from tqdm import tqdm
-import utils.loss_mask as loss_mask  # 确保包含视锥体掩码计算函数
+import utils.loss_mask as loss_mask
+import PIL.Image
+import src.mast3r_src.dust3r.dust3r.datasets.utils.cropping as cropping # 导入裁剪和缩放模块
 
 # Waymo坐标系到OpenCV坐标系的转换矩阵
 WAYMO2OPENCV = np.array([
@@ -45,12 +47,56 @@ def calculate_loss_mask(targets, context):
     return mask
 
 
+def reconstruct_depth_map(depth_data, original_shape):
+    """
+    从压缩格式重建深度图
+    :param depth_data: 从.npy文件加载的字典数据
+    :param original_shape: 原始深度图形状 (H, W)
+    :return: 重建后的深度图 (H, W)
+    """
+    depth_map = np.zeros(original_shape, dtype=np.float32)
+    mask = depth_data['mask']
+    values = depth_data['value']
+    depth_map[mask] = values
+    return depth_map
+
+
+def crop_resize_if_necessary(image, depthmap, intrinsics, resolution):
+    """Adapted from DUST3R's Co3D dataset implementation"""
+    if not isinstance(image, PIL.Image.Image):
+        image = PIL.Image.fromarray(image)
+
+    # Downscale with lanczos interpolation so that image.size == resolution
+    # cropping centered on the principal point
+    W, H = image.size
+    cx, cy = intrinsics[:2, 2].round().astype(int)
+    min_margin_x = min(cx, W - cx)
+    min_margin_y = min(cy, H - cy)
+    assert min_margin_x > W / 5
+    assert min_margin_y > H / 5
+    l, t = cx - min_margin_x, cy - min_margin_y
+    r, b = cx + min_margin_x, cy + min_margin_y
+    crop_bbox = (l, t, r, b)
+    image, depthmap, intrinsics = cropping.crop_image_depthmap(image, depthmap, intrinsics, crop_bbox)
+
+    # High-quality Lanczos down-scaling
+    target_resolution = np.array(resolution)
+    image, depthmap, intrinsics = cropping.rescale_image_depthmap(image, depthmap, intrinsics, target_resolution)
+
+    # Actual cropping (if necessary) with bilinear interpolation
+    intrinsics2 = cropping.camera_matrix_of_crop(intrinsics, image.size, resolution, offset_factor=0.5)
+    crop_bbox = cropping.bbox_from_intrinsics_in_out(intrinsics, intrinsics2, resolution)
+    image, depthmap, intrinsics2 = cropping.crop_image_depthmap(image, depthmap, intrinsics, crop_bbox)
+
+    return image, depthmap, intrinsics2
+
+
 def load_waymo_scene_data(scene_dir, resolution=None):
     """
     加载Waymo场景数据
     :param scene_dir: 场景目录路径 (Path对象)
-    :param resolution: 可选的目标分辨率 (height, width)
-    :return: 视图列表，每个视图包含深度图、内参、位姿和有效掩码
+    :param resolution: 目标分辨率 (width, height)
+    :return: 视图列表，每个视图包含图像、深度图、内参、位姿等完整信息
     """
     views = []
     # 加载相机内参 (5个相机)
@@ -93,51 +139,45 @@ def load_waymo_scene_data(scene_dir, resolution=None):
             # 转换为OpenCV坐标系
             cam_to_world_opencv = WAYMO2OPENCV @ cam_to_world
 
+            # ===== 加载原始图像 =====
+            rgb_image = PIL.Image.open(img_path)
+
             # ===== 加载深度图 =====
-            # 假设深度图存储在scene_dir/"depth"目录下，与图像同名
-            depth_path = scene_dir / "depth" / f"{frame_id:06d}_{cam_id}.npy"
+            depth_path = scene_dir / "lidar_depth" / f"{frame_id:06d}_{cam_id}.npy"
             if not depth_path.exists():
                 continue
 
-            depth_map = np.load(depth_path)
-            # 转换为PyTorch张量并添加批次维度
-            depth_tensor = torch.tensor(depth_map).unsqueeze(0).float()
+            # 加载压缩的深度数据
+            depth_data = np.load(depth_path, allow_pickle=True).item()
+            # 重建深度图
+            original_shape = rgb_image.size[::-1]  # (H, W)
+            depth_map = reconstruct_depth_map(depth_data, original_shape)
+
+            # 获取当前相机的内参
+            K = intrinsics[cam_id].copy()
+
+            # ===== 应用裁剪和缩放 =====
+            if resolution:
+                rgb_image, depth_map, K = crop_resize_if_necessary(
+                    rgb_image, depth_map, K, resolution
+                )
 
             # ===== 创建有效掩码 =====
-            valid_mask = depth_tensor > 1e-6
+            valid_mask = depth_map > 1e-6
+            sky_mask = depth_map <= 0.0
 
-            # ===== 处理内参 =====
-            K = intrinsics[cam_id].copy()
-            # 如果指定分辨率，调整内参 (假设深度图需要同样缩放)
-            if resolution:
-                orig_h, orig_w = depth_map.shape
-                new_h, new_w = resolution
-                # 计算缩放因子
-                scale_x = new_w / orig_w
-                scale_y = new_h / orig_h
-                # 调整内参
-                K[0, :] *= scale_x  # fx, cx
-                K[1, :] *= scale_y  # fy, cy
-                # 缩放深度图
-                depth_tensor = torch.nn.functional.interpolate(
-                    depth_tensor.unsqueeze(0),
-                    size=resolution,
-                    mode='nearest'
-                ).squeeze(0)
-                valid_mask = torch.nn.functional.interpolate(
-                    valid_mask.float().unsqueeze(0),
-                    size=resolution,
-                    mode='nearest'
-                ).squeeze(0) > 0.5
-
-            # ===== 构建视图字典 =====
+            # ===== 构建完整的视图字典 =====
             view_data = {
-                'depthmap': depth_tensor,
-                'valid_mask': valid_mask,
-                'camera_intrinsics': torch.tensor(K).float(),
-                'camera_pose': torch.tensor(cam_to_world_opencv).float(),
-                'frame_id': frame_id,
-                'camera_id': cam_id
+                'original_img': rgb_image,  # 保持为PIL图像，稍后转换
+                'depthmap': depth_map,  # numpy数组
+                'camera_pose': cam_to_world_opencv,  # 4x4矩阵
+                'camera_intrinsics': K,  # 3x3矩阵
+                'dataset': 'waymo',
+                'label': f"waymo/{scene_dir.name}/{frame_id}_{cam_id}",
+                'instance': f'{frame_id}_{cam_id}',
+                'is_metric_scale': True,
+                'sky_mask': sky_mask,  # 天空掩码
+                'valid_mask': valid_mask,  # 有效深度掩码
             }
             views.append(view_data)
 
@@ -146,10 +186,10 @@ def load_waymo_scene_data(scene_dir, resolution=None):
 
 if __name__ == '__main__':
     # 配置参数
-    DATA_ROOT = "/path/to/Sprocessed"  # 替换为实际路径
-    OUTPUT_DIR = "coverage"
-    BATCH_SIZE = 50  # 根据GPU内存调整
-    RESOLUTION = (256, 256)  # 处理分辨率 (H,W)，根据需求调整
+    DATA_ROOT = "/home/robot/zyr/waymo/Sprocessed"  # 替换为实际路径
+    OUTPUT_DIR = "/home/robot/zyr/waymo/coverage"
+    BATCH_SIZE = 5  # 根据GPU内存调整
+    RESOLUTION = (320, 480)  # 处理分辨率 (width, height)
 
     # 获取GPU编号
     gpu_id = sys.argv[1] if len(sys.argv) > 1 else "0"
@@ -164,6 +204,9 @@ if __name__ == '__main__':
 
     # 多GPU分配场景 (示例: 4个GPU)
     scenes = [scenes[i] for i in range(int(gpu_id), len(scenes), 4)]
+
+    # 图像转换器 (稍后用于转换为张量)
+    org_transform = torchvision.transforms.ToTensor()
 
     for scene_id in tqdm(scenes, desc=f"GPU {gpu_id} Processing Scenes"):
         scene_dir = base_path / scene_id
@@ -181,10 +224,22 @@ if __name__ == '__main__':
             print(f"警告: 场景 {scene_id} 无有效数据")
             continue
 
-        # 将数据移至GPU
+        # 转换视图数据为张量并移至GPU
         for view in views:
-            for key in ['depthmap', 'valid_mask', 'camera_intrinsics', 'camera_pose']:
-                view[key] = view[key].to(device)
+            # 转换图像为张量
+            view['original_img'] = org_transform(view['original_img']).to(device)
+
+            # 转换深度图为张量
+            depth_tensor = torch.tensor(view['depthmap']).unsqueeze(0).float()
+            view['depthmap'] = depth_tensor.to(device)
+
+            # 转换掩码为张量
+            view['valid_mask'] = torch.tensor(view['valid_mask']).unsqueeze(0).to(device)
+            view['sky_mask'] = torch.tensor(view['sky_mask']).unsqueeze(0).to(device)
+
+            # 转换内参和位姿为张量
+            view['camera_intrinsics'] = torch.tensor(view['camera_intrinsics']).float().unsqueeze(0).to(device)
+            view['camera_pose'] = torch.tensor(view['camera_pose']).float().unsqueeze(0).to(device)
 
         # 存储覆盖率结果
         coverage_matrix = []
@@ -192,7 +247,7 @@ if __name__ == '__main__':
 
         # 遍历每个视图作为上下文 (context)
         for i in tqdm(range(num_views), desc="Processing context views"):
-            context_view = views[i]
+            context_view = [views[i]]  # 包装为列表
 
             # 分批计算覆盖率
             coverage_vals = []
@@ -201,7 +256,7 @@ if __name__ == '__main__':
                 batch_targets = views[batch_start:batch_end]
 
                 # 计算当前批次的掩码
-                masks = calculate_loss_mask(batch_targets, [context_view])
+                masks = calculate_loss_mask(batch_targets, context_view)
 
                 # 计算覆盖率 (有效像素比例)
                 # masks形状: [batch_size, 1, H, W] -> 在空间维度求平均
