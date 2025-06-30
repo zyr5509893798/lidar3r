@@ -9,7 +9,7 @@ import os
 os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 import cv2  # noqa
 import numpy as np  # noqa
-from dust3r.utils.geometry import colmap_to_opencv_intrinsics, opencv_to_colmap_intrinsics  # noqa
+from ...utils.geometry import colmap_to_opencv_intrinsics, opencv_to_colmap_intrinsics  # noqa
 try:
     lanczos = PIL.Image.Resampling.LANCZOS
     bicubic = PIL.Image.Resampling.BICUBIC

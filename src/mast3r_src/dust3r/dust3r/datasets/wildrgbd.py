@@ -11,8 +11,8 @@ import os.path as osp
 import cv2
 import numpy as np
 
-from dust3r.datasets.co3d import Co3d
-from dust3r.utils.image import imread_cv2
+from ..datasets.co3d import Co3d
+from ..utils.image import imread_cv2
 
 
 class WildRGBD(Co3d):

@@ -11,6 +11,9 @@ import utils.loss_mask as loss_mask
 import PIL.Image
 import src.mast3r_src.dust3r.dust3r.datasets.utils.cropping as cropping # 导入裁剪和缩放模块
 
+import torchvision
+from PIL import ImageDraw
+
 # Waymo坐标系到OpenCV坐标系的转换矩阵
 WAYMO2OPENCV = np.array([
     [0, -1, 0, 0],  # Waymo Y(左) -> OpenCV X(右)
@@ -63,6 +66,7 @@ def reconstruct_depth_map(depth_data, original_shape):
     return depth_map
 
 
+'''
 def crop_resize_if_necessary(image, depthmap, intrinsics, resolution):
     """Adapted from DUST3R's Co3D dataset implementation"""
     if not isinstance(image, PIL.Image.Image):
@@ -91,7 +95,68 @@ def crop_resize_if_necessary(image, depthmap, intrinsics, resolution):
     image, depthmap, intrinsics2 = cropping.crop_image_depthmap(image, depthmap, intrinsics, crop_bbox)
 
     return image, depthmap, intrinsics2
+'''
 
+
+def crop_resize_if_necessary(image, depthmap, intrinsics, resolution):
+    """Adapted from DUST3R's Co3D dataset implementation with debug info"""
+    if not isinstance(image, PIL.Image.Image):
+        image = PIL.Image.fromarray(image)
+
+    # Downscale with lanczos interpolation so that image.size == resolution
+    # cropping centered on the principal point
+    W, H = image.size
+    cx, cy = intrinsics[:2, 2].round().astype(int)
+    
+    # ==================== DEBUG INFO ADDED ====================
+    # print(f"Debug Info - Image size: ({W}, {H})")
+    # print(f"Debug Info - Principal point: ({cx}, {cy})")
+    # print(f"Debug Info - Intrinsics matrix:")
+    # print(intrinsics)
+    
+    min_margin_x = min(cx, W - cx)
+    min_margin_y = min(cy, H - cy)
+    
+    # ==================== DEBUG INFO ADDED ====================
+    # print(f"Debug Info - min_margin_x: {min_margin_x} | Required: > {W/5}")
+    # print(f"Debug Info - min_margin_y: {min_margin_y} | Required: > {H/5}")
+    
+    try:
+        assert min_margin_x > W / 5, f"min_margin_x ({min_margin_x}) <= W/5 ({W/5})"
+        assert min_margin_y > H / 5, f"min_margin_y ({min_margin_y}) <= H/5 ({H/5})"
+    except AssertionError as e:
+        # 创建错误截图保存到文件
+        debug_img = image.copy()
+        draw = ImageDraw.Draw(debug_img)
+        # 绘制主点位置
+        draw.ellipse([(cx-10, cy-10), (cx+10, cy+10)], outline="red", width=3)
+        # 绘制预期裁剪区域
+        draw.rectangle([(cx - min_margin_x, cy - min_margin_y), 
+                       (cx + min_margin_x, cy + min_margin_y)], outline="yellow", width=2)
+        # 保存调试图像
+        debug_img.save("crop_debug_error.png")
+        print(f"Assertion failed! Debug image saved as crop_debug_error.png")
+        raise e
+    
+    l, t = cx - min_margin_x, cy - min_margin_y
+    r, b = cx + min_margin_x, cy + min_margin_y
+    crop_bbox = (l, t, r, b)
+    
+    # ==================== DEBUG INFO ADDED ====================
+    # print(f"Debug Info - Crop BBOX: {crop_bbox}")
+    
+    image, depthmap, intrinsics = cropping.crop_image_depthmap(image, depthmap, intrinsics, crop_bbox)
+
+    # High-quality Lanczos down-scaling
+    target_resolution = np.array(resolution)
+    image, depthmap, intrinsics = cropping.rescale_image_depthmap(image, depthmap, intrinsics, target_resolution)
+
+    # Actual cropping (if necessary) with bilinear interpolation
+    intrinsics2 = cropping.camera_matrix_of_crop(intrinsics, image.size, resolution, offset_factor=0.5)
+    crop_bbox = cropping.bbox_from_intrinsics_in_out(intrinsics, intrinsics2, resolution)
+    image, depthmap, intrinsics2 = cropping.crop_image_depthmap(image, depthmap, intrinsics, crop_bbox)
+
+    return image, depthmap, intrinsics2
 
 def load_waymo_scene_data(scene_dir, resolution=None):
     """
@@ -105,7 +170,20 @@ def load_waymo_scene_data(scene_dir, resolution=None):
     intrinsics = {}
     for cam_id in range(5):
         intr_file = scene_dir / "intrinsics" / f"{cam_id}.txt"
-        intrinsics[cam_id] = np.loadtxt(intr_file).reshape(3, 3)[:3, :3]
+        params = np.loadtxt(intr_file)
+        # Waymo参数格式: [f_u, f_v, c_u, c_v, k1, k2, p1, p2, k3] (共9个)
+        if len(params) >= 4:
+            # 提取主要内参参数
+            f_u, f_v, c_u, c_v = params[:4]
+            # 构建标准3x3内参矩阵
+            K = np.array([
+                [f_u, 0,   c_u],
+                [0,   f_v, c_v],
+                [0,   0,   1]
+            ])
+        else:
+            raise ValueError(f"Invalid intrinsic parameters: {params}")
+        intrinsics[cam_id] = K
 
     # 加载相机到ego的外参
     extrinsics = {}
@@ -191,7 +269,7 @@ if __name__ == '__main__':
     DATA_ROOT = "/home/robot/zyr/waymo/Sprocessed"  # 替换为实际路径
     OUTPUT_DIR = "/home/robot/zyr/waymo/coverage"
     BATCH_SIZE = 5  # 根据GPU内存调整/home/robot/mfx
-    RESOLUTION = (320, 480)  # 处理分辨率 (width, height)
+    RESOLUTION = (1920, 1280)  # 处理分辨率 (width, height)
 
     # 获取GPU编号
     gpu_id = sys.argv[1] if len(sys.argv) > 1 else "0"
@@ -262,7 +340,7 @@ if __name__ == '__main__':
 
                 # 计算覆盖率 (有效像素比例)
                 # masks形状: [batch_size, 1, H, W] -> 在空间维度求平均
-                batch_coverage = masks.mean(dim=[2, 3]).squeeze(1)
+                batch_coverage = masks.float().mean(dim=[2, 3]).squeeze(1)
                 coverage_vals.append(batch_coverage)
 
             # 合并批次结果

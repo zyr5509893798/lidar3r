@@ -14,8 +14,8 @@ from collections import deque
 import cv2
 import numpy as np
 
-from dust3r.datasets.base.base_stereo_view_dataset import BaseStereoViewDataset
-from dust3r.utils.image import imread_cv2
+from ..datasets.base.base_stereo_view_dataset import BaseStereoViewDataset
+from ..utils.image import imread_cv2
 
 
 class Co3d(BaseStereoViewDataset):

@@ -14,7 +14,7 @@ import numpy as np
 from PIL import Image
 import json
 
-from dust3r.datasets.base.base_stereo_view_dataset import BaseStereoViewDataset
+from ..datasets.base.base_stereo_view_dataset import BaseStereoViewDataset
 
 
 class Habitat(BaseStereoViewDataset):

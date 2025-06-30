@@ -5,7 +5,7 @@
 # A dataset base class that you can easily resize and combine.
 # --------------------------------------------------------
 import numpy as np
-from dust3r.datasets.base.batched_sampler import BatchedRandomSampler
+from ..base.batched_sampler import BatchedRandomSampler
 
 
 class EasyDataset:
