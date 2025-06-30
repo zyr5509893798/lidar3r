@@ -6,6 +6,8 @@ from tqdm import tqdm
 import concurrent.futures
 import logging
 
+# 这个函数速度太慢了，计算方法没有问题，但是不能用。
+
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger('precompute_coverage')
