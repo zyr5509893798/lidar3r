@@ -13,6 +13,20 @@ from src.mast3r_src.dust3r.dust3r.utils.image import imread_cv2
 
 logger = logging.getLogger(__name__)
 
+# 从压缩格式重建深度图 (从第二段代码移植)
+def reconstruct_depth_map(depth_data, original_shape):
+    """
+    从压缩格式重建深度图
+    :param depth_data: 从.npy文件加载的字典数据
+    :param original_shape: 原始深度图形状 (H, W)
+    :return: 重建后的深度图 (H, W)
+    """
+    depth_map = np.zeros(original_shape, dtype=np.float32)
+    mask = depth_data['mask']
+    values = depth_data['value']
+    depth_map[mask] = values
+    return depth_map
+
 
 class ScanNetPPData():
 

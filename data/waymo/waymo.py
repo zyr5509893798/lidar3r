@@ -23,6 +23,7 @@ class WaymoData:
 
         # 数据结构
         self.color_paths = {}
+        self.depth_paths = {}  # 新增：存储深度图路径
         self.intrinsics = {}
         self.c2ws = {}
         self.sequences = []
@@ -42,7 +43,7 @@ class WaymoData:
             scene_dir = Path(root) / 'Sprocessed' / seq
 
             # 检查基本目录结构
-            required_dirs = ['images', 'intrinsics', 'extrinsics', 'ego_pose']
+            required_dirs = ['images', 'intrinsics', 'extrinsics', 'ego_pose', 'lidar_depth']  # 增加lidar_depth检查
             if not all((scene_dir / d).exists() for d in required_dirs):
                 logger.warning(f"场景 {seq} 缺少必要目录，跳过")
                 continue
@@ -54,23 +55,21 @@ class WaymoData:
 
             for cam_id in range(5):  # 5个相机
                 # 内参
-                intrinsics_file = scene_dir / 'intrinsics' / f'{cam_id}.txt'
-                if not intrinsics_file.exists():
-                    logger.warning(f"场景 {seq} 相机 {cam_id} 缺少内参文件")
-                    valid_cameras = False
-                    break
-
-                K = np.loadtxt(intrinsics_file)
-                if K.size != 9:
-                    logger.warning(f"场景 {seq} 相机 {cam_id} 内参格式错误")
-                    valid_cameras = False
-                    break
-
-                K = K.reshape(3, 3)
-                # 转换为4x4齐次矩阵
-                K_hom = np.eye(4)
-                K_hom[:3, :3] = K
-                cam_intrinsics[cam_id] = K_hom
+                intr_file = scene_dir / "intrinsics" / f"{cam_id}.txt"
+                params = np.loadtxt(intr_file)
+                # Waymo参数格式: [f_u, f_v, c_u, c_v, k1, k2, p1, p2, k3] (共9个)
+                if len(params) >= 4:
+                    # 提取主要内参参数
+                    f_u, f_v, c_u, c_v = params[:4]
+                    # 构建标准3x3内参矩阵
+                    K = np.array([
+                        [f_u, 0, c_u],
+                        [0, f_v, c_v],
+                        [0, 0, 1]
+                    ])
+                else:
+                    raise ValueError(f"Invalid intrinsic parameters: {params}")
+                cam_intrinsics[cam_id] = K
 
                 # 外参 (相机到ego的变换)
                 extrinsics_file = scene_dir / 'extrinsics' / f'{cam_id}.txt'
@@ -117,8 +116,15 @@ class WaymoData:
                 # 处理每个相机
                 for cam_id in range(5):
                     img_file = scene_dir / 'images' / f'{frame_id:06d}_{cam_id}.png'
+                    depth_file = scene_dir / 'lidar_depth' / f'{frame_id:06d}_{cam_id}.npy'  # 深度图路径
+
                     if not img_file.exists():
                         logger.warning(f"场景 {seq} 帧 {frame_id} 相机 {cam_id} 缺少图像，跳过")
+                        continue
+
+                    # 新增：检查深度图是否存在
+                    if not depth_file.exists():
+                        logger.warning(f"场景 {seq} 帧 {frame_id} 相机 {cam_id} 缺少深度图，跳过")
                         continue
 
                     # 计算相机到世界的变换
@@ -158,24 +164,60 @@ class WaymoData:
         img_path = self.color_paths[sequence][view_idx]
         rgb_image = imread_cv2(img_path)
 
+        # 新增：读取深度图
+        depth_path = self.depth_paths[sequence][view_idx]
+        depth_data = np.load(depth_path, allow_pickle=True).item()
+        depth_map = reconstruct_depth_map(depth_data, rgb_image.shape[:2])  # 原始图像形状 (H, W)
+
         # 获取内参和位姿
         intrinsics = self.intrinsics[sequence][view_idx]
         c2w = self.c2ws[sequence][view_idx]
 
-        # 调整大小 (使用占位深度图)
-        fake_depth = np.zeros((rgb_image.shape[0], rgb_image.shape[1]), dtype=np.float32)
-        rgb_image, _, intrinsics = crop_resize_if_necessary(
-            rgb_image, fake_depth, intrinsics, resolution
+        # 调整大小 (同时处理图像和深度图)
+        rgb_image, depth_map, intrinsics = crop_resize_if_necessary(
+            rgb_image, depth_map, intrinsics, resolution
         )
+
+        # 创建有效掩码和天空掩码
+        valid_mask = depth_map > 1e-6
+        sky_mask = depth_map <= 0.0
 
         return {
             'original_img': rgb_image,
-            'depthmap': None,  # Waymo不提供深度图
+            'depthmap': depth_map,  # 现在返回真实的深度图
             'camera_pose': c2w,
             'camera_intrinsics': intrinsics,
             'dataset': 'waymo',
             'label': f"waymo/{sequence}",
             'instance': f'{view_idx}',
             'is_metric_scale': True,
-            'sky_mask': None  # 没有深度图无法计算天空掩膜
+            'sky_mask': sky_mask,  # 新增天空掩码
+            'valid_mask': valid_mask  # 新增有效深度掩码
         }
+
+def get_waymo_dataset(root, stage, resolution, num_epochs_per_epoch=1):
+
+    data = WaymoData(root, stage)
+
+    dataset = DUST3RSplattingDataset(
+        data,
+        resolution,
+        num_epochs_per_epoch=num_epochs_per_epoch,
+    )
+
+    return dataset
+
+def get_waymo_test_dataset(root, alpha, beta, resolution, use_every_n_sample=100):
+
+    data = WaymoData(root, 'val')
+
+    samples_file = f'data/waymo/test_set.json'
+    print(f"Loading samples from: {samples_file}")
+    with open(samples_file, 'r') as f:
+        samples = json.load(f)
+    samples = samples[::use_every_n_sample]
+
+    dataset = DUST3RSplattingTestDataset(data, samples, resolution)
+
+    return dataset
+

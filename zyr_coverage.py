@@ -107,20 +107,10 @@ def crop_resize_if_necessary(image, depthmap, intrinsics, resolution):
     # cropping centered on the principal point
     W, H = image.size
     cx, cy = intrinsics[:2, 2].round().astype(int)
-    
-    # ==================== DEBUG INFO ADDED ====================
-    # print(f"Debug Info - Image size: ({W}, {H})")
-    # print(f"Debug Info - Principal point: ({cx}, {cy})")
-    # print(f"Debug Info - Intrinsics matrix:")
-    # print(intrinsics)
-    
+
     min_margin_x = min(cx, W - cx)
     min_margin_y = min(cy, H - cy)
-    
-    # ==================== DEBUG INFO ADDED ====================
-    # print(f"Debug Info - min_margin_x: {min_margin_x} | Required: > {W/5}")
-    # print(f"Debug Info - min_margin_y: {min_margin_y} | Required: > {H/5}")
-    
+
     try:
         assert min_margin_x > W / 5, f"min_margin_x ({min_margin_x}) <= W/5 ({W/5})"
         assert min_margin_y > H / 5, f"min_margin_y ({min_margin_y}) <= H/5 ({H/5})"
