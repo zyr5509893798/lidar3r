@@ -132,7 +132,7 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
         return len(self.data.sequences) * self.num_epochs_per_epoch
 
     def sample(self, sequence, num_target_views, context_overlap_threshold=0.5, target_overlap_threshold=0.6):
-# 魔改sample，暂时失去了作用，只随便挑一张图。
+# 魔改sample，暂时失去了作用，只随便挑一张图。     测试。
         first_context_view = random.randint(0, len(self.data.color_paths[sequence]) - 1) # 随便选图1
 
         # Pick a second context view that has sufficient overlap with the first context view
