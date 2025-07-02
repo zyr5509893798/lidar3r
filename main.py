@@ -15,7 +15,7 @@ sys.path.append('src/mast3r_src')
 sys.path.append('src/mast3r_src/dust3r')
 from src.mast3r_src.dust3r.dust3r.losses import L21
 from src.mast3r_src.mast3r.losses import ConfLoss, Regr3D
-import data.scannetpp.scannetpp as scannetpp
+import data.waymo.waymo as waymo  # 引入我们的waymo数据集处理函数
 import src.mast3r_src.mast3r.model as mast3r_model
 import src.pixelsplat_src.benchmarker as benchmarker
 import src.pixelsplat_src.decoder_splatting_cuda as pixelsplat_decoder
@@ -83,11 +83,11 @@ class MAST3RGaussians(L.LightningModule):
 
         self.save_hyperparameters()
 
-    def forward(self, view1, view2):
+    def forward(self, view1):
 
         # Freeze the encoder and decoder
         with torch.no_grad():
-            (shape1, shape2), (feat1, feat2), (pos1, pos2) = self.encoder._encode_symmetrized(view1, view2)
+            (shape1, shape2), (feat1, feat2), (pos1, pos2) = self.encoder._encode_symmetrized(view1)
             dec1, dec2 = self.encoder._decoder(feat1, pos1, feat2, pos2)
 
         # Train the downstream heads
@@ -115,10 +115,10 @@ class MAST3RGaussians(L.LightningModule):
     def training_step(self, batch, batch_idx):
 
         _, _, h, w = batch["context"][0]["img"].shape
-        view1, view2 = batch['context']
+        view1 = batch['context']  # 单图输入
 
         # Predict using the encoder/decoder and calculate the loss
-        pred1, pred2 = self.forward(view1, view2)
+        pred1, pred2 = self.forward(view1)
         color, _ = self.decoder(batch, pred1, pred2, (h, w))
 
         # Calculate losses
@@ -127,12 +127,13 @@ class MAST3RGaussians(L.LightningModule):
         # 1 在第二组视图的视锥（frustum）内
         # 2 第一组视图中的深度值有效（非零）
         # 3 投影后的深度与第二组视图的实际深度匹配（允许微小误差）
-        mask = loss_mask.calculate_loss_mask(batch)
+
+        # 如果是单视图，不做匹配，那么就无法使用这个mask
+        # mask = loss_mask.calculate_loss_mask(batch)
+
+        # loss也需要改
         loss, mse, lpips = self.calculate_loss(
-            batch, view1, view2, pred1, pred2, color, mask,
-            apply_mask=self.config.loss.apply_mask,
-            average_over_mask=self.config.loss.average_over_mask,
-            calculate_ssim=False
+            batch, color
         )
 
         # Log losses
@@ -149,12 +150,9 @@ class MAST3RGaussians(L.LightningModule):
         color, _ = self.decoder(batch, pred1, pred2, (h, w))
 
         # Calculate losses
-        mask = loss_mask.calculate_loss_mask(batch)
+        # mask = loss_mask.calculate_loss_mask(batch)
         loss, mse, lpips = self.calculate_loss(
-            batch, view1, view2, pred1, pred2, color, mask,
-            apply_mask=self.config.loss.apply_mask,
-            average_over_mask=self.config.loss.average_over_mask,
-            calculate_ssim=False
+            batch, color
         )
 
         # Log losses
@@ -174,12 +172,9 @@ class MAST3RGaussians(L.LightningModule):
             color, _ = self.decoder(batch, pred1, pred2, (h, w))
 
         # Calculate losses
-        mask = loss_mask.calculate_loss_mask(batch)
+        # mask = loss_mask.calculate_loss_mask(batch)
         loss, mse, lpips, ssim = self.calculate_loss(
-            batch, view1, view2, pred1, pred2, color, mask,
-            apply_mask=self.config.loss.apply_mask,
-            average_over_mask=self.config.loss.average_over_mask,
-            calculate_ssim=True
+            batch, color
         )
 
         # Log losses
@@ -190,53 +185,53 @@ class MAST3RGaussians(L.LightningModule):
         benchmark_file_path = os.path.join(self.config.save_dir, "benchmark.json")
         self.benchmarker.dump(os.path.join(benchmark_file_path))
 
-    def calculate_loss(self, batch, view1, view2, pred1, pred2, color, mask, apply_mask=True, average_over_mask=True, calculate_ssim=False):
+    def calculate_loss(self, batch, view1, view2, pred1, pred2, color, mask, apply_mask=False, average_over_mask=True, calculate_ssim=False):
 
         target_color = torch.stack([target_view['original_img'] for target_view in batch['target']], dim=1)
         predicted_color = color
 
-        if apply_mask:
-            assert mask.sum() > 0, "There are no valid pixels in the mask!"
-            target_color = target_color * mask[..., None, :, :]
-            predicted_color = predicted_color * mask[..., None, :, :]
+        # if apply_mask:
+        #     assert mask.sum() > 0, "There are no valid pixels in the mask!"
+        #     target_color = target_color * mask[..., None, :, :]
+        #     predicted_color = predicted_color * mask[..., None, :, :]
 
         flattened_color = einops.rearrange(predicted_color, 'b v c h w -> (b v) c h w')
         flattened_target_color = einops.rearrange(target_color, 'b v c h w -> (b v) c h w')
-        flattened_mask = einops.rearrange(mask, 'b v h w -> (b v) h w')
+        # flattened_mask = einops.rearrange(mask, 'b v h w -> (b v) h w')
 
         # MSE loss
         rgb_l2_loss = (predicted_color - target_color) ** 2
-        if average_over_mask:
-            mse_loss = (rgb_l2_loss * mask[:, None, ...]).sum() / mask.sum()
-        else:
-            mse_loss = rgb_l2_loss.mean()
+        # if average_over_mask:
+        #     mse_loss = (rgb_l2_loss * mask[:, None, ...]).sum() / mask.sum()
+        # else:
+        mse_loss = rgb_l2_loss.mean()
 
         # LPIPS loss
         lpips_loss = self.lpips_criterion(flattened_target_color, flattened_color, normalize=True)
-        if average_over_mask:
-            lpips_loss = (lpips_loss * flattened_mask[:, None, ...]).sum() / flattened_mask.sum()
-        else:
-            lpips_loss = lpips_loss.mean()
+        # if average_over_mask:
+        #     lpips_loss = (lpips_loss * flattened_mask[:, None, ...]).sum() / flattened_mask.sum()
+        # else:
+        lpips_loss = lpips_loss.mean()
 
         # Calculate the total loss
         loss = 0
         loss += self.config.loss.mse_loss_weight * mse_loss
         loss += self.config.loss.lpips_loss_weight * lpips_loss
 
-        # MAST3R Loss
-        if self.config.loss.mast3r_loss_weight is not None:
-            mast3r_loss = self.mast3r_criterion(view1, view2, pred1, pred2)[0]
-            loss += self.config.loss.mast3r_loss_weight * mast3r_loss
+        # MAST3R Loss，单张图无法使用这个loss，不做匹配，去掉了
+        # if self.config.loss.mast3r_loss_weight is not None:
+        #     mast3r_loss = self.mast3r_criterion(view1, view2, pred1, pred2)[0]
+        #     loss += self.config.loss.mast3r_loss_weight * mast3r_loss
 
         # Masked SSIM
-        if calculate_ssim:
-            if average_over_mask:
-                ssim_val = compute_ssim.compute_ssim(flattened_target_color, flattened_color, full=True)
-                ssim_val = (ssim_val * flattened_mask[:, None, ...]).sum() / flattened_mask.sum()
-            else:
-                ssim_val = compute_ssim.compute_ssim(flattened_target_color, flattened_color, full=False)
-                ssim_val = ssim_val.mean()
-            return loss, mse_loss, lpips_loss, ssim_val
+        # if calculate_ssim:
+        #     if average_over_mask:
+        #         ssim_val = compute_ssim.compute_ssim(flattened_target_color, flattened_color, full=True)
+        #         ssim_val = (ssim_val * flattened_mask[:, None, ...]).sum() / flattened_mask.sum()
+        #     else:
+        #         ssim_val = compute_ssim.compute_ssim(flattened_target_color, flattened_color, full=False)
+        #         ssim_val = ssim_val.mean()
+        #     return loss, mse_loss, lpips_loss, ssim_val
 
         return loss, mse_loss, lpips_loss
 
@@ -282,34 +277,34 @@ def run_experiment(config):
             name=config.name
         )
         loggers.append(csv_logger)
-    if config.loggers.use_wandb:
-        wandb_logger = L.pytorch.loggers.WandbLogger(
-            project='splatt3r',
-            name=config.name,
-            save_dir=config.save_dir,
-            config=omegaconf.OmegaConf.to_container(config),
-        )
-        if wandb.run is not None:
-            wandb.run.log_code(".")
-        loggers.append(wandb_logger)
-
-    # Set up profiler
-    if config.use_profiler:
-        profiler = L.pytorch.profilers.PyTorchProfiler(
-            dirpath=config.save_dir,
-            filename='trace',
-            export_to_chrome=True,
-            schedule=torch.profiler.schedule(wait=0, warmup=1, active=3),
-            on_trace_ready=torch.profiler.tensorboard_trace_handler(config.save_dir),
-            activities=[
-                torch.profiler.ProfilerActivity.CPU,
-                torch.profiler.ProfilerActivity.CUDA
-            ],
-            profile_memory=True,
-            with_stack=True
-        )
-    else:
-        profiler = None
+    # if config.loggers.use_wandb:
+    #     wandb_logger = L.pytorch.loggers.WandbLogger(
+    #         project='splatt3r',
+    #         name=config.name,
+    #         save_dir=config.save_dir,
+    #         config=omegaconf.OmegaConf.to_container(config),
+    #     )
+    #     if wandb.run is not None:
+    #         wandb.run.log_code(".")
+    #     loggers.append(wandb_logger)
+    #
+    # # Set up profiler
+    # if config.use_profiler:
+    #     profiler = L.pytorch.profilers.PyTorchProfiler(
+    #         dirpath=config.save_dir,
+    #         filename='trace',
+    #         export_to_chrome=True,
+    #         schedule=torch.profiler.schedule(wait=0, warmup=1, active=3),
+    #         on_trace_ready=torch.profiler.tensorboard_trace_handler(config.save_dir),
+    #         activities=[
+    #             torch.profiler.ProfilerActivity.CPU,
+    #             torch.profiler.ProfilerActivity.CUDA
+    #         ],
+    #         profile_memory=True,
+    #         with_stack=True
+    #     )
+    # else:
+    #     profiler = None
 
     # Model
     print('Loading Model')
@@ -321,7 +316,7 @@ def run_experiment(config):
 
     # Training Datasets
     print(f'Building Datasets')
-    train_dataset = scannetpp.get_scannet_dataset(
+    train_dataset = waymo.get_waymo_dataset(
         config.data.root,
         'train',
         config.data.resolution,
@@ -334,7 +329,7 @@ def run_experiment(config):
         num_workers=config.data.num_workers,
     )
 
-    val_dataset = scannetpp.get_scannet_test_dataset(
+    val_dataset = waymo.get_waymo_test_dataset(
         config.data.root,
         alpha=0.5,
         beta=0.5,
@@ -372,9 +367,9 @@ def run_experiment(config):
     # Testing
     original_save_dir = config.save_dir
     results = {}
-    for alpha, beta in ((0.9, 0.9), (0.7, 0.7), (0.5, 0.5), (0.3, 0.3)):
+    for alpha, beta in ((0.9, 0.9)):
 
-        test_dataset = scannetpp.get_scannet_test_dataset(
+        test_dataset = waymo.get_waymo_test_dataset(
             config.data.root,
             alpha=alpha,
             beta=beta,
@@ -387,40 +382,70 @@ def run_experiment(config):
             batch_size=config.data.batch_size,
             num_workers=config.data.num_workers,
         )
+        new_save_dir = os.path.join(
+            original_save_dir,
+            f'alpha_{alpha}_beta_{beta}_apply_mask_{apply_mask}_average_over_mask_{average_over_mask}'
+        )
+        os.makedirs(new_save_dir, exist_ok=True)
+        model.config.save_dir = new_save_dir
 
-        masking_configs = ((True, False), (True, True))
-        for apply_mask, average_over_mask in masking_configs:
+        L.seed_everything(config.seed, workers=True)
 
-            new_save_dir = os.path.join(
-                original_save_dir,
-                f'alpha_{alpha}_beta_{beta}_apply_mask_{apply_mask}_average_over_mask_{average_over_mask}'
-            )
-            os.makedirs(new_save_dir, exist_ok=True)
-            model.config.save_dir = new_save_dir
+        # Training
+        trainer = L.Trainer(
+            accelerator="gpu",
+            benchmark=True,
+            callbacks=[export.SaveBatchData(save_dir=config.save_dir), ],
+            default_root_dir=config.save_dir,
+            devices=config.devices,
+            log_every_n_steps=10,
+            strategy="ddp_find_unused_parameters_true" if len(config.devices) > 1 else "auto",
+        )
 
-            L.seed_everything(config.seed, workers=True)
+        model.lpips_criterion = lpips.LPIPS('vgg', spatial=average_over_mask)
+        model.config.loss.apply_mask = False
+        model.config.loss.average_over_mask = False
+        res = trainer.test(model, dataloaders=data_loader_test)
+        results[f"alpha: {alpha}, beta: {beta}, apply_mask: {apply_mask}, average_over_mask: {average_over_mask}"] = res
 
-            # Training
-            trainer = L.Trainer(
-                accelerator="gpu",
-                benchmark=True,
-                callbacks=[export.SaveBatchData(save_dir=config.save_dir),],
-                default_root_dir=config.save_dir,
-                devices=config.devices,
-                log_every_n_steps=10,
-                strategy="ddp_find_unused_parameters_true" if len(config.devices) > 1 else "auto",
-            )
+        # Save the results
+        save_path = os.path.join(original_save_dir, 'results.json')
+        with open(save_path, 'w') as f:
+            json.dump(results, f)
 
-            model.lpips_criterion = lpips.LPIPS('vgg', spatial=average_over_mask)
-            model.config.loss.apply_mask = apply_mask
-            model.config.loss.average_over_mask = average_over_mask
-            res = trainer.test(model, dataloaders=data_loader_test)
-            results[f"alpha: {alpha}, beta: {beta}, apply_mask: {apply_mask}, average_over_mask: {average_over_mask}"] = res
+        # masking_configs = ((True, False), (True, True))
+        # for apply_mask, average_over_mask in masking_configs:
 
-            # Save the results
-            save_path = os.path.join(original_save_dir, 'results.json')
-            with open(save_path, 'w') as f:
-                json.dump(results, f)
+            # new_save_dir = os.path.join(
+            #     original_save_dir,
+            #     f'alpha_{alpha}_beta_{beta}_apply_mask_{apply_mask}_average_over_mask_{average_over_mask}'
+            # )
+            # os.makedirs(new_save_dir, exist_ok=True)
+            # model.config.save_dir = new_save_dir
+            #
+            # L.seed_everything(config.seed, workers=True)
+            #
+            # # Training
+            # trainer = L.Trainer(
+            #     accelerator="gpu",
+            #     benchmark=True,
+            #     callbacks=[export.SaveBatchData(save_dir=config.save_dir),],
+            #     default_root_dir=config.save_dir,
+            #     devices=config.devices,
+            #     log_every_n_steps=10,
+            #     strategy="ddp_find_unused_parameters_true" if len(config.devices) > 1 else "auto",
+            # )
+            #
+            # model.lpips_criterion = lpips.LPIPS('vgg', spatial=average_over_mask)
+            # model.config.loss.apply_mask = False
+            # model.config.loss.average_over_mask = False
+            # res = trainer.test(model, dataloaders=data_loader_test)
+            # results[f"alpha: {alpha}, beta: {beta}, apply_mask: {apply_mask}, average_over_mask: {average_over_mask}"] = res
+            #
+            # # Save the results
+            # save_path = os.path.join(original_save_dir, 'results.json')
+            # with open(save_path, 'w') as f:
+            #     json.dump(results, f)
 
 
 if __name__ == "__main__":

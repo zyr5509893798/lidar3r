@@ -146,7 +146,7 @@ class AsymmetricCroCo3DStereo (
             out2, pos2, _ = self._encode_image(img2, true_shape2)
         return out, out2, pos, pos2
 
-    def _encode_symmetrized(self, view1, view2):
+    def _encode_symmetrized(self, view1):
         img1 = view1['img']  # B C H W dataloader对的item整合进行到了字典的img层，所以这里是BCHW
         img2 = view2['img']
         B = img1.shape[0]
@@ -192,9 +192,9 @@ class AsymmetricCroCo3DStereo (
         head = getattr(self, f'head{head_num}')
         return head(decout, img_shape)
 
-    def forward(self, view1, view2):
+    def forward(self, view1):
         # encode the two images --> B,S,D
-        (shape1, shape2), (feat1, feat2), (pos1, pos2) = self._encode_symmetrized(view1, view2)
+        (shape1, shape2), (feat1, feat2), (pos1, pos2) = self._encode_symmetrized(view1)
 
         # combine all ref images into object-centric representation
         dec1, dec2 = self._decoder(feat1, pos1, feat2, pos2)
