@@ -7,6 +7,8 @@ from data.data import crop_resize_if_necessary
 
 logger = logging.getLogger(__name__)
 
+from data.data import crop_resize_if_necessary, DUST3RSplattingDataset, DUST3RSplattingTestDataset
+
 # Waymo到OpenCV坐标系的转换矩阵
 WAYMO2OPENCV = np.array([
     [0, -1, 0, 0],  # Waymo Y(左) -> OpenCV X(右)

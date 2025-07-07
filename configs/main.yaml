@@ -10,7 +10,7 @@ devices: 'auto'
 use_profiler: False
 loggers:
   use_csv_logger: True
-  use_wandb: True
+  use_wandb: False
 
 # Model
 use_pretrained: True
@@ -18,7 +18,7 @@ pretrained_mast3r_path: './checkpoints/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt
 
 # Data
 data:
-  root: '/home/bras5602/data/scannetpp'
+  root: '/home/robot/zyr/waymo'
   batch_size: 12
   num_workers: 16
   resolution: [512, 512]
