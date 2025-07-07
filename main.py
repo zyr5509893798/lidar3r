@@ -97,14 +97,16 @@ class MAST3RGaussians(L.LightningModule):
         pred1['covariances'] = geometry.build_covariance(pred1['scales'], pred1['rotations'])
         pred2['covariances'] = geometry.build_covariance(pred2['scales'], pred2['rotations'])
 
+        # SH残差学习，用于计算球谐函数残差，与3dgs的外观有关
         learn_residual = True
         if learn_residual:
             new_sh1 = torch.zeros_like(pred1['sh'])
-            new_sh2 = torch.zeros_like(pred2['sh'])
+            # new_sh2 = torch.zeros_like(pred2['sh'])
             new_sh1[..., 0] = sh_utils.RGB2SH(einops.rearrange(view1['original_img'], 'b c h w -> b h w c'))
-            new_sh2[..., 0] = sh_utils.RGB2SH(einops.rearrange(view2['original_img'], 'b c h w -> b h w c'))
+            # new_sh2[..., 0] = sh_utils.RGB2SH(einops.rearrange(view2['original_img'], 'b c h w -> b h w c'))
             pred1['sh'] = pred1['sh'] + new_sh1
-            pred2['sh'] = pred2['sh'] + new_sh2
+            # 深度图这部分理论上不需要参与
+            #pred2['sh'] = pred2['sh'] + new_sh2
 
         # Update the keys to make clear that pts3d and means are in view1's frame
         pred2['pts3d_in_other_view'] = pred2.pop('pts3d')
@@ -143,7 +145,7 @@ class MAST3RGaussians(L.LightningModule):
     def validation_step(self, batch, batch_idx):
 
         _, _, h, w = batch["context"][0]["img"].shape
-        view1 = batch['context']
+        view1 = batch['context'][0]
 
         # Predict using the encoder/decoder and calculate the loss
         pred1, pred2 = self.forward(view1)
@@ -162,7 +164,7 @@ class MAST3RGaussians(L.LightningModule):
     def test_step(self, batch, batch_idx):
 
         _, _, h, w = batch["context"][0]["img"].shape
-        view1 = batch['context']
+        view1 = batch['context'][0]
         num_targets = len(batch['target'])
 
         # Predict using the encoder/decoder and calculate the loss

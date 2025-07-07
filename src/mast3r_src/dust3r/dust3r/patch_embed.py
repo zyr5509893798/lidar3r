@@ -41,6 +41,7 @@ class ManyAR_PatchEmbed (PatchEmbed):
 
     def forward(self, img, true_shape):
         B, C, H, W = img.shape
+        # print("111", img.shape)
         assert W >= H, f'img should be in landscape mode, but got {W=} {H=}'
         assert H % self.patch_size[0] == 0, f"Input image height ({H}) is not a multiple of patch size ({self.patch_size[0]})."
         assert W % self.patch_size[1] == 0, f"Input image width ({W}) is not a multiple of patch size ({self.patch_size[1]})."

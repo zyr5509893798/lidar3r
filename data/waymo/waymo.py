@@ -269,4 +269,6 @@ def normalize_depth_map(depth_map, max_depth=100.0):
     normalized = depth_map / max_depth
 
     # 转换为三通道伪RGB
-    return np.stack([normalized] * 3, axis=-1)  # 形状变为 [H, W, 3]
+    rgb = np.stack([normalized] * 3, axis=-1)  # 形状变为 [H, W, 3]
+
+    return np.moveaxis(rgb, -1, 0) # B 3 H W，我们最终需要的格式。
