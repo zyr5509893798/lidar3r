@@ -92,12 +92,16 @@ class WaymoData:
 
             # 获取所有帧的ID (通过ego_pose文件)
             pose_files = sorted((scene_dir / 'ego_pose').glob('*.txt'))
+            # 关键修改：过滤掉文件名带下划线的文件（如000000_0.txt）
+            pose_files = [f for f in pose_files if '_' not in f.stem]  # 新增过滤行
+
             if not pose_files:
                 logger.warning(f"场景 {seq} 没有ego位姿文件")
                 scenes_with_no_frames.append(seq)
                 continue
 
             frame_ids = [int(f.stem) for f in pose_files]
+
 
             # 为场景存储数据
             scene_color_paths = []
