@@ -143,10 +143,10 @@ class MAST3RGaussians(L.LightningModule):
     def validation_step(self, batch, batch_idx):
 
         _, _, h, w = batch["context"][0]["img"].shape
-        view1, view2 = batch['context']
+        view1 = batch['context']
 
         # Predict using the encoder/decoder and calculate the loss
-        pred1, pred2 = self.forward(view1, view2)
+        pred1, pred2 = self.forward(view1)
         color, _ = self.decoder(batch, pred1, pred2, (h, w))
 
         # Calculate losses
@@ -162,12 +162,12 @@ class MAST3RGaussians(L.LightningModule):
     def test_step(self, batch, batch_idx):
 
         _, _, h, w = batch["context"][0]["img"].shape
-        view1, view2 = batch['context']
+        view1 = batch['context']
         num_targets = len(batch['target'])
 
         # Predict using the encoder/decoder and calculate the loss
         with self.benchmarker.time("encoder"):
-            pred1, pred2 = self.forward(view1, view2)
+            pred1, pred2 = self.forward(view1)
         with self.benchmarker.time("decoder", num_calls=num_targets):
             color, _ = self.decoder(batch, pred1, pred2, (h, w))
 
@@ -359,7 +359,6 @@ def run_experiment(config):
         log_every_n_steps=10,
         logger=loggers,
         max_epochs=config.opt.epochs,
-        profiler=profiler,
         strategy="ddp_find_unused_parameters_true" if len(config.devices) > 1 else "auto",
     )
     trainer.fit(model, train_dataloaders=data_loader_train, val_dataloaders=data_loader_val)

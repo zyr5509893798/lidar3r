@@ -1,4 +1,10 @@
 import os
+import json
+import logging
+import sys
+
+import cv2
+import numpy as np
 import logging
 import numpy as np
 from pathlib import Path
@@ -107,6 +113,7 @@ class WaymoData:
 
             # 为场景存储数据
             scene_color_paths = []
+            scene_depth_paths = []  # 新增：存储深度图路径
             scene_intrinsics = []
             scene_c2ws = []
 
@@ -143,6 +150,7 @@ class WaymoData:
 
                     # 存储数据
                     scene_color_paths.append(str(img_file))
+                    scene_depth_paths.append(str(depth_file))  # 存储深度图路径
                     scene_intrinsics.append(cam_intrinsics[cam_id].copy())
                     scene_c2ws.append(T_cam_world_opencv)
 
@@ -152,6 +160,7 @@ class WaymoData:
                 continue
 
             self.color_paths[seq] = scene_color_paths
+            self.depth_paths[seq] = scene_depth_paths  # 存储深度图路径
             self.intrinsics[seq] = scene_intrinsics
             self.c2ws[seq] = scene_c2ws
 
@@ -218,7 +227,7 @@ def get_waymo_dataset(root, stage, resolution, num_epochs_per_epoch=1):
 
 def get_waymo_test_dataset(root, alpha, beta, resolution, use_every_n_sample=100):
 
-    data = WaymoData(root, 'val')
+    data = WaymoData(root, 'test')
 
     samples_file = f'data/waymo/test_set.json'
     print(f"Loading samples from: {samples_file}")
