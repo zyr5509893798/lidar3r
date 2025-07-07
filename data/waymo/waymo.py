@@ -182,9 +182,12 @@ class WaymoData:
         valid_mask = depth_map > 1e-6
         sky_mask = depth_map <= 0.0
 
+        # 标准化并转换为伪RGB
+        depth_rgb = normalize_depth_map(depth_map)
+
         return {
             'original_img': rgb_image,
-            'depthmap': depth_map,  # 现在返回真实的深度图
+            'depthmap': depth_rgb,  # 现在返回真实的深度图(标准化之后）
             'camera_pose': c2w,
             'camera_intrinsics': intrinsics,
             'dataset': 'waymo',
@@ -221,3 +224,34 @@ def get_waymo_test_dataset(root, alpha, beta, resolution, use_every_n_sample=100
 
     return dataset
 
+# 从压缩格式重建深度图 (从第二段代码移植)
+def reconstruct_depth_map(depth_data, original_shape):
+    """
+    从压缩格式重建深度图
+    :param depth_data: 从.npy文件加载的字典数据
+    :param original_shape: 原始深度图形状 (H, W)
+    :return: 重建后的深度图 (H, W)
+    """
+    depth_map = np.zeros(original_shape, dtype=np.float32)
+    mask = depth_data['mask']
+    values = depth_data['value']
+    depth_map[mask] = values
+    return depth_map
+
+
+# 深度图标准化函数
+def normalize_depth_map(depth_map, max_depth=100.0):
+    """
+    标准化深度图：
+    1. 截断到最大深度值
+    2. 归一化到[0, 1]范围
+    3. 转换为三通道伪RGB
+    """
+    # 截断深度值
+    depth_map = np.clip(depth_map, 0, max_depth)
+
+    # 归一化到[0, 1]
+    normalized = depth_map / max_depth
+
+    # 转换为三通道伪RGB
+    return np.stack([normalized] * 3, axis=-1)  # 形状变为 [H, W, 3]
