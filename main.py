@@ -115,7 +115,7 @@ class MAST3RGaussians(L.LightningModule):
     def training_step(self, batch, batch_idx):
 
         _, _, h, w = batch["context"][0]["img"].shape
-        view1 = batch['context']  # 单图输入
+        view1 = batch['context'][0]  # 单图输入，注意这里要取出第一个字典，这里原本是[view1, view2]，现在长这样[view1]，但是我们要把view1取出来，而不是整个列表
 
         # Predict using the encoder/decoder and calculate the loss
         pred1, pred2 = self.forward(view1)
