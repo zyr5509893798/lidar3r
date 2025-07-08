@@ -22,7 +22,7 @@ def calculate_in_frustum_mask(depth_1, intrinsics_1, c2w_1, depth_2, intrinsics_
     Returns:
         torch.Tensor: Camera space points with shape (b, v1, v2, h, w, 3).
     """
-
+    print("depth_1形状打印", depth_1.shape)
     _, v1, h, w = depth_1.shape
     _, v2, _, _ = depth_2.shape
 

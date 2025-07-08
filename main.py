@@ -187,7 +187,7 @@ class MAST3RGaussians(L.LightningModule):
         benchmark_file_path = os.path.join(self.config.save_dir, "benchmark.json")
         self.benchmarker.dump(os.path.join(benchmark_file_path))
 
-    def calculate_loss(self, batch, view1, view2, pred1, pred2, color, mask, apply_mask=False, average_over_mask=True, calculate_ssim=False):
+    def calculate_loss(self, batch, color):
 
         target_color = torch.stack([target_view['original_img'] for target_view in batch['target']], dim=1)
         predicted_color = color

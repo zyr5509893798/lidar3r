@@ -44,6 +44,7 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         self.desc_conf_mode = desc_conf_mode
         self.use_offsets = use_offsets
         self.sh_degree = sh_degree
+        self.max_depth = 100
         super().__init__(**kwargs)
 
     def _encode_symmetrized(self, view1):

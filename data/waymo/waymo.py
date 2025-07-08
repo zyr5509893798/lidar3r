@@ -64,7 +64,7 @@ class WaymoData:
             for cam_id in range(5):  # 5个相机
                 # 内参
                 intr_file = scene_dir / "intrinsics" / f"{cam_id}.txt"
-                params = np.loadtxt(intr_file)
+                params = np.loadtxt(intr_file).astype(np.float32)
                 # Waymo参数格式: [f_u, f_v, c_u, c_v, k1, k2, p1, p2, k3] (共9个)
                 if len(params) >= 4:
                     # 提取主要内参参数
@@ -74,7 +74,7 @@ class WaymoData:
                         [f_u, 0, c_u],
                         [0, f_v, c_v],
                         [0, 0, 1]
-                    ])
+                    ], dtype=np.float32)
                 else:
                     raise ValueError(f"Invalid intrinsic parameters: {params}")
                 cam_intrinsics[cam_id] = K
@@ -86,7 +86,7 @@ class WaymoData:
                     valid_cameras = False
                     break
 
-                T_cam_ego = np.loadtxt(extrinsics_file)
+                T_cam_ego = np.loadtxt(extrinsics_file).astype(np.float32)
                 if T_cam_ego.size != 16:
                     logger.warning(f"场景 {seq} 相机 {cam_id} 外参格式错误")
                     valid_cameras = False
@@ -124,7 +124,7 @@ class WaymoData:
                     logger.warning(f"场景 {seq} 帧 {frame_id} 缺少ego位姿，跳过")
                     continue
 
-                ego_pose = np.loadtxt(ego_pose_file).reshape(4, 4)
+                ego_pose = np.loadtxt(ego_pose_file).reshape(4, 4).astype(np.float32)
 
                 # 处理每个相机
                 for cam_id in range(5):
@@ -256,7 +256,7 @@ def reconstruct_depth_map(depth_data, original_shape):
 
 # 深度图标准化函数
 def normalize_depth_map(depth_map, max_depth=100.0):
-    """
+    """.astype(np.float32)
     标准化深度图：
     1. 截断到最大深度值
     2. 归一化到[0, 1]范围
@@ -267,8 +267,8 @@ def normalize_depth_map(depth_map, max_depth=100.0):
 
     # 归一化到[0, 1]
     normalized = depth_map / max_depth
-
-    # 转换为三通道伪RGB
-    rgb = np.stack([normalized] * 3, axis=-1)  # 形状变为 [H, W, 3]
-
-    return np.moveaxis(rgb, -1, 0) # B 3 H W，我们最终需要的格式。
+    return np.moveaxis(normalized, -1, 0)
+    # # 转换为三通道伪RGB
+    # rgb = np.stack([normalized] * 3, axis=-1)  # 形状变为 [H, W, 3]
+    #
+    # return np.moveaxis(rgb, -1, 0) # 3 H W，我们最终需要的格式。
