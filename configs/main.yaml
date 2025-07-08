@@ -19,7 +19,7 @@ pretrained_mast3r_path: './checkpoints/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt
 # Data
 data:
   root: '/home/robot/zyr/waymo'
-  batch_size: 12
+  batch_size: 1
   num_workers: 16
   resolution: [512, 512]
   epochs_per_train_epoch: 100 # How many times to sample from each scene each training epoch (helps avoid unnecessary Pytorch Lightning overhead)
