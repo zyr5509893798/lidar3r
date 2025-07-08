@@ -225,7 +225,7 @@ def get_waymo_dataset(root, stage, resolution, num_epochs_per_epoch=1):
 
     return dataset
 
-def get_waymo_test_dataset(root, alpha, beta, resolution, use_every_n_sample=100):
+def get_waymo_test_dataset(root, resolution, use_every_n_sample=100):
 
     data = WaymoData(root, 'test')
 

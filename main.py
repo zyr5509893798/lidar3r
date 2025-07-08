@@ -368,51 +368,47 @@ def run_experiment(config):
     # Testing
     original_save_dir = config.save_dir
     results = {}
-    for alpha, beta in ((0.9, 0.9)):
+    test_dataset = waymo.get_waymo_test_dataset(
+        config.data.root,
+        resolution=config.data.resolution,
+        use_every_n_sample=10
+    )
+    data_loader_test = torch.utils.data.DataLoader(
+        test_dataset,
+        shuffle=False,
+        batch_size=config.data.batch_size,
+        num_workers=config.data.num_workers,
+    )
+    new_save_dir =  original_save_dir # 这里没必要搞那些复杂的
+    os.makedirs(new_save_dir, exist_ok=True)
+    model.config.save_dir = new_save_dir
 
-        test_dataset = waymo.get_waymo_test_dataset(
-            config.data.root,
-            alpha=alpha,
-            beta=beta,
-            resolution=config.data.resolution,
-            use_every_n_sample=10
-        )
-        data_loader_test = torch.utils.data.DataLoader(
-            test_dataset,
-            shuffle=False,
-            batch_size=config.data.batch_size,
-            num_workers=config.data.num_workers,
-        )
-        new_save_dir = os.path.join(
-            original_save_dir,
-            f'alpha_{alpha}_beta_{beta}_apply_mask_{apply_mask}_average_over_mask_{average_over_mask}'
-        )
-        os.makedirs(new_save_dir, exist_ok=True)
-        model.config.save_dir = new_save_dir
+    L.seed_everything(config.seed, workers=True)
 
-        L.seed_everything(config.seed, workers=True)
+    # Training
+    trainer = L.Trainer(
+        accelerator="gpu",
+        benchmark=True,
+        callbacks=[export.SaveBatchData(save_dir=config.save_dir), ],
+        default_root_dir=config.save_dir,
+        devices=config.devices,
+        log_every_n_steps=10,
+        strategy="ddp_find_unused_parameters_true" if len(config.devices) > 1 else "auto",
+    )
 
-        # Training
-        trainer = L.Trainer(
-            accelerator="gpu",
-            benchmark=True,
-            callbacks=[export.SaveBatchData(save_dir=config.save_dir), ],
-            default_root_dir=config.save_dir,
-            devices=config.devices,
-            log_every_n_steps=10,
-            strategy="ddp_find_unused_parameters_true" if len(config.devices) > 1 else "auto",
-        )
+    model.lpips_criterion = lpips.LPIPS('vgg', spatial=average_over_mask)
+    model.config.loss.apply_mask = False
+    model.config.loss.average_over_mask = False
+    res = trainer.test(model, dataloaders=data_loader_test)
+    # results[f"alpha: {alpha}, beta: {beta}, apply_mask: {apply_mask}, average_over_mask: {average_over_mask}"] = res
+    results["waymo"] = res
 
-        model.lpips_criterion = lpips.LPIPS('vgg', spatial=average_over_mask)
-        model.config.loss.apply_mask = False
-        model.config.loss.average_over_mask = False
-        res = trainer.test(model, dataloaders=data_loader_test)
-        results[f"alpha: {alpha}, beta: {beta}, apply_mask: {apply_mask}, average_over_mask: {average_over_mask}"] = res
 
-        # Save the results
-        save_path = os.path.join(original_save_dir, 'results.json')
-        with open(save_path, 'w') as f:
-            json.dump(results, f)
+    # Save the results
+    save_path = os.path.join(original_save_dir, 'results.json')
+    with open(save_path, 'w') as f:
+        json.dump(results, f)
+
 
         # masking_configs = ((True, False), (True, True))
         # for apply_mask, average_over_mask in masking_configs:
