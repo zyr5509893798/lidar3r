@@ -175,12 +175,12 @@ class MAST3RGaussians(L.LightningModule):
 
         # Calculate losses
         # mask = loss_mask.calculate_loss_mask(batch)
-        loss, mse, lpips, ssim = self.calculate_loss(
+        loss, mse, lpips= self.calculate_loss(
             batch, color
         )
 
         # Log losses
-        self.log_metrics('test', loss, mse, lpips, ssim=ssim)
+        self.log_metrics('test', loss, mse, lpips)
         return loss
 
     def on_test_end(self):
@@ -333,8 +333,6 @@ def run_experiment(config):
 
     val_dataset = waymo.get_waymo_test_dataset(
         config.data.root,
-        alpha=0.5,
-        beta=0.5,
         resolution=config.data.resolution,
         use_every_n_sample=100,
     )
@@ -396,7 +394,7 @@ def run_experiment(config):
         strategy="ddp_find_unused_parameters_true" if len(config.devices) > 1 else "auto",
     )
 
-    model.lpips_criterion = lpips.LPIPS('vgg', spatial=average_over_mask)
+    model.lpips_criterion = lpips.LPIPS('vgg')
     model.config.loss.apply_mask = False
     model.config.loss.average_over_mask = False
     res = trainer.test(model, dataloaders=data_loader_test)
