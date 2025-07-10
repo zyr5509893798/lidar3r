@@ -13,45 +13,58 @@ import src.mast3r_src.dust3r.dust3r.datasets.utils.cropping as cropping # 导入
 
 import torchvision
 from PIL import ImageDraw
+import os
+import json
+import logging
+import sys
+import cv2
+import numpy as np
+from pathlib import Path
+from src.mast3r_src.dust3r.dust3r.utils.image import imread_cv2
+from data.data import crop_resize_if_necessary, DUST3RSplattingDataset, DUST3RSplattingTestDataset
+from scipy.spatial import ConvexHull
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Waymo坐标系到OpenCV坐标系的转换矩阵
+# Waymo到OpenCV坐标系的转换矩阵
 WAYMO2OPENCV = np.array([
-    [0, -1, 0, 0],  # Waymo Y(左) -> OpenCV X(右)
-    [0, 0, -1, 0],  # Waymo Z(上) -> OpenCV Y(下)
-    [1, 0, 0, 0],  # Waymo X(前) -> OpenCV Z(前)
+    [0, -1, 0, 0],
+    [0, 0, -1, 0],
+    [1, 0, 0, 0],
     [0, 0, 0, 1]
-])
+], dtype=np.float32)
 
+#
+# @torch.no_grad()
+# def calculate_loss_mask(targets, context):
+#     '''计算目标视图在上下文视图视锥体内的有效掩码'''
+#     # 从目标视图列表中提取深度图
+#     target_depth = torch.stack([target_view['depthmap'] for target_view in targets], dim=1)
+#     # 提取目标视图的内参矩阵
+#     target_intrinsics = torch.stack([target_view['camera_intrinsics'] for target_view in targets], dim=1)
+#     # 提取目标视图的相机位姿 (c2w)
+#     target_c2w = torch.stack([target_view['camera_pose'] for target_view in targets], dim=1)
+#
+#     # 从上下文视图列表中提取深度图
+#     context_depth = torch.stack([context_view['depthmap'] for context_view in context], dim=1)
+#     # 提取上下文视图的内参矩阵
+#     context_intrinsics = torch.stack([context_view['camera_intrinsics'] for context_view in context], dim=1)
+#     # 提取上下文视图的相机位姿
+#     context_c2w = torch.stack([context_view['camera_pose'] for context_view in context], dim=1)
+#
+#     # 确保内参矩阵是3x3形式
+#     target_intrinsics = target_intrinsics[..., :3, :3]
+#     context_intrinsics = context_intrinsics[..., :3, :3]
+#
+#     # 计算目标视图在上下文视图视锥体内的有效掩码
+#     mask = loss_mask.calculate_in_frustum_mask(
+#         target_depth, target_intrinsics, target_c2w,
+#         context_depth, context_intrinsics, context_c2w
+#     )
+#     return mask
+#
 
-@torch.no_grad()
-def calculate_loss_mask(targets, context):
-    '''计算目标视图在上下文视图视锥体内的有效掩码'''
-    # 从目标视图列表中提取深度图
-    target_depth = torch.stack([target_view['depthmap'] for target_view in targets], dim=1)
-    # 提取目标视图的内参矩阵
-    target_intrinsics = torch.stack([target_view['camera_intrinsics'] for target_view in targets], dim=1)
-    # 提取目标视图的相机位姿 (c2w)
-    target_c2w = torch.stack([target_view['camera_pose'] for target_view in targets], dim=1)
-
-    # 从上下文视图列表中提取深度图
-    context_depth = torch.stack([context_view['depthmap'] for context_view in context], dim=1)
-    # 提取上下文视图的内参矩阵
-    context_intrinsics = torch.stack([context_view['camera_intrinsics'] for context_view in context], dim=1)
-    # 提取上下文视图的相机位姿
-    context_c2w = torch.stack([context_view['camera_pose'] for context_view in context], dim=1)
-
-    # 确保内参矩阵是3x3形式
-    target_intrinsics = target_intrinsics[..., :3, :3]
-    context_intrinsics = context_intrinsics[..., :3, :3]
-
-    # 计算目标视图在上下文视图视锥体内的有效掩码
-    mask = loss_mask.calculate_in_frustum_mask(
-        target_depth, target_intrinsics, target_c2w,
-        context_depth, context_intrinsics, context_c2w
-    )
-    return mask
-
-
+# 深度图处理函数保持不变...
+# 从压缩格式重建深度图 (从第二段代码移植)
 def reconstruct_depth_map(depth_data, original_shape):
     """
     从压缩格式重建深度图
@@ -65,6 +78,25 @@ def reconstruct_depth_map(depth_data, original_shape):
     depth_map[mask] = values
     return depth_map
 
+
+# 深度图标准化函数
+def normalize_depth_map(depth_map, max_depth=100.0):
+    """.astype(np.float32)
+    标准化深度图：
+    1. 截断到最大深度值
+    2. 归一化到[0, 1]范围
+    3. 转换为三通道伪RGB
+    """
+    # 截断深度值
+    depth_map = np.clip(depth_map, 0, max_depth)
+
+    # 归一化到[0, 1]
+    normalized = depth_map / max_depth
+    return np.moveaxis(normalized, -1, 0)
+    # # 转换为三通道伪RGB
+    # rgb = np.stack([normalized] * 3, axis=-1)  # 形状变为 [H, W, 3]
+    #
+    # return np.m
 
 '''
 def crop_resize_if_necessary(image, depthmap, intrinsics, resolution):
