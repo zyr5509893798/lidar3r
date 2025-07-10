@@ -391,7 +391,7 @@ def get_waymo_dataset(root, stage, resolution, num_epochs_per_epoch=1):
 
 if __name__ == '__main__':
     # 配置参数
-    DATA_ROOT = "/home/robot/zyr/waymo/Sprocessed"  # 替换为实际路径
+    DATA_ROOT = "/home/robot/zyr/waymo"  # 替换为实际路径
     OUTPUT_DIR = "/home/robot/zyr/waymo/coverage"
     BATCH_SIZE = 5  # 根据GPU内存调整/home/robot/mfx
     RESOLUTION = (1920, 1280)  # 处理分辨率 (width, height)
@@ -415,14 +415,14 @@ if __name__ == '__main__':
                 if seq in data.coverage:
                     coverage_matrix = data.coverage[seq]
 
-                    # 转换为列表（JSON可序列化）
+                    # 转换为列表（JSON可序COVERAGE_DIR列化）
                     coverage_list = coverage_matrix.tolist()
 
                     # 构建保存数据结构
                     save_data = {seq: coverage_list}
 
                     # 保存到文件
-                    save_path = os.path.join(COVERAGE_DIR, f"{seq}.json")
+                    save_path = os.path.join(OUTPUT_DIR, f"{seq}.json")
                     with open(save_path, 'w') as f:
                         json.dump(save_data, f, indent=2)
 
