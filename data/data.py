@@ -92,8 +92,9 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
         #   "scene": sequence}
         sequence = self.data.sequences[idx // self.num_epochs_per_epoch]
         sequence_length = len(self.data.color_paths[sequence])
+
         # 确定序列id之后，选择图1，图2，对照测试图
-        context_views, target_views = self.sample(sequence, self.num_target_views, self.alpha, self.beta)
+        context_views, target_views, camera_id = self.sample(sequence, self.num_target_views, self.alpha, self.beta)
 
         views = {"context": [], "target": [], "scene": sequence}
 
@@ -101,8 +102,9 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
         for c_view in context_views:
             # 图1和图2需要取出图像处理，取出深度图得到对应的世界坐标系下的三维点云和有效性掩码，把这些放入context
             assert c_view < sequence_length, f"Invalid view index: {c_view}, sequence length: {sequence_length}, c_views: {context_views}"
-
-            view = self.data.get_view(sequence, c_view, self.resolution) # 从各种路径和id中取真实的这一帧的图像，深度图，ctw等
+            # 这里的c_view改为代表随机选取的那一帧，camera_id代表我们选择这一帧的哪个相机视角
+            # 对每次选择context和target对，我们只会选择同一个相机视角（不同视角重叠度太低）
+            view = self.data.get_view(sequence, c_view, camera_id, self.resolution) # 从各种路径和id中取真实的这一帧的图像，深度图，ctw等
 
             # Transform the input
             view['img'] = self.transform(view['original_img']) # 图像转换
@@ -121,7 +123,7 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
         # Fetch the target views
         for t_view in target_views:
             # 参照图像只需要对原图进行简单处理。
-            view = self.data.get_view(sequence, t_view, self.resolution)
+            view = self.data.get_view(sequence, t_view, camera_id, self.resolution)
             view['original_img'] = self.org_transform(view['original_img'])
             views['target'].append(view)
 
@@ -133,64 +135,69 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
 
     def sample(self, sequence, num_target_views, context_overlap_threshold=0.5, target_overlap_threshold=0.6):
 # 魔改sample，暂时失去了作用，只随便挑一张图。     测试。
+# 魔改不行，重新搞
+
+        # 注意这里改了之后，view的id选择只是选择了随机一帧，另外要选择随机一个相机视角
         first_context_view = random.randint(0, len(self.data.color_paths[sequence]) - 1) # 随便选图1
+        camera_id = random.randint(0, 4) # 随机选相机视角
 
         # Pick a second context view that has sufficient overlap with the first context view
-        # valid_second_context_views = []
-        # for frame in range(len(self.data.color_paths[sequence])):
-        #     if frame == first_context_view:
-        #         continue
-        #     overlap = self.coverage[sequence][first_context_view][frame]
-        #     # coverage[sequence]帧间重叠度矩阵，通过 coverage[sequence][i][j] 可直接访问帧 i 和帧 j 的重叠度。
-        #     if overlap > context_overlap_threshold:
-        #         valid_second_context_views.append(frame)
-        #         # 将所有重叠度满足要求的帧加入候选序列
-        # if len(valid_second_context_views) > 0: # 从所有满足要求的帧中随机选择一个作为图2
-        #     second_context_view = random.choice(valid_second_context_views)
-        #
-        # # If there are no valid second context views, pick the best one
-        # else: # 没满足要求的，选最好的一个
-        #     best_view = None
-        #     best_overlap = None
-        #     for frame in range(len(self.data.color_paths[sequence])):
-        #         if frame == first_context_view:
-        #             continue
-        #         overlap = self.coverage[sequence][first_context_view][frame]
-        #         if best_view is None or overlap > best_overlap:
-        #             best_view = frame
-        #             best_overlap = overlap
-        #     second_context_view = best_view
+        valid_second_context_views = []
+        for frame in range(len(self.data.color_paths[sequence])):
+            if frame == first_context_view:
+                continue
+            overlap = self.coverage[sequence][camera_id][first_context_view][frame] # 重叠度矩阵多了一维[camera_id]
+            # coverage[sequence]帧间重叠度矩阵，通过 coverage[sequence][i][j] 可直接访问帧 i 和帧 j 的重叠度。
+            if overlap > context_overlap_threshold:
+                valid_second_context_views.append(frame)
+                # 将所有重叠度满足要求的帧加入候选序列
+        if len(valid_second_context_views) > 0: # 从所有满足要求的帧中随机选择一个作为图2
+            second_context_view = random.choice(valid_second_context_views)
+
+        # If there are no valid second context views, pick the best one
+        else: # 没满足要求的，选最好的一个
+            best_view = None
+            best_overlap = None
+            for frame in range(len(self.data.color_paths[sequence])):
+                if frame == first_context_view:
+                    continue
+                overlap = self.coverage[sequence][camera_id][first_context_view][frame] # 加上[camera_id]
+                if best_view is None or overlap > best_overlap:
+                    best_view = frame
+                    best_overlap = overlap
+            second_context_view = best_view
 
         # Pick the target views
-        # valid_target_views = []  # 在同一个序列中选择测试帧，用于最终的对照
-        # for frame in range(len(self.data.color_paths[sequence])):
-        #     if frame == first_context_view:
-        #         continue
-        #     overlap_max = max(   # 测试帧要与至少一个输入图有一定的重合度
-        #         self.coverage[sequence][first_context_view][frame],
-        #         # self.coverage[sequence][second_context_view][frame]
-        #     )
-        #     if overlap_max > target_overlap_threshold:
-        #         valid_target_views.append(frame)
-        # if len(valid_target_views) >= num_target_views:
-        #     target_views = random.sample(valid_target_views, num_target_views)
-        #
-        # # If there are not enough valid target views, pick the best ones
-        # else:   # 没有符合要求的就选最合适的。
-        #     overlaps = []
-        #     for frame in range(len(self.data.color_paths[sequence])):
-        #         if frame == first_context_view or frame == second_context_view:
-        #             continue
-        #         overlap = max(
-        #             self.coverage[sequence][first_context_view][frame],
-        #             self.coverage[sequence][second_context_view][frame]
-        #         )
-        #         overlaps.append((frame, overlap))
-        #     overlaps.sort(key=lambda x: x[1], reverse=True)
-        #     target_views = [frame for frame, _ in overlaps[:num_target_views]]
-        # return [first_context_view, second_context_view], target_views
+        valid_target_views = []  # 在同一个序列中选择测试帧，用于最终的对照
+        for frame in range(len(self.data.color_paths[sequence])):
+            if frame == first_context_view:
+                continue
+            overlap_max = max(   # 测试帧要与至少一个输入图有一定的重合度
+                self.coverage[sequence][camera_id][first_context_view][frame],
+                # self.coverage[sequence][second_context_view][frame]
+            )
+            if overlap_max > target_overlap_threshold:
+                valid_target_views.append(frame)
+        if len(valid_target_views) >= num_target_views:
+            target_views = random.sample(valid_target_views, num_target_views)
 
-        return [first_context_view], [first_context_view]  # 先全用一张图和它自己测试模型
+        # If there are not enough valid target views, pick the best ones
+        else:   # 没有符合要求的就选最合适的。
+            overlaps = []
+            for frame in range(len(self.data.color_paths[sequence])):
+                if frame == first_context_view or frame == second_context_view:
+                    continue
+                overlap = max(
+                    self.coverage[sequence][camera_id][first_context_view][frame], # 都加上[camera_id]
+                    self.coverage[sequence][camera_id][second_context_view][frame]
+                )
+                overlaps.append((frame, overlap))
+            overlaps.sort(key=lambda x: x[1], reverse=True)
+            target_views = [frame for frame, _ in overlaps[:num_target_views]]
+
+        return [first_context_view, second_context_view], target_views, camera_id
+
+        # return [first_context_view], [first_context_view]  # 先全用一张图和它自己测试模型
 
 
 class DUST3RSplattingTestDataset(torch.utils.data.Dataset):

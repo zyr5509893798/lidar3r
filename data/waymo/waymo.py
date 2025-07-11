@@ -118,6 +118,13 @@ class WaymoData:
             scene_c2ws = []
 
             for frame_id in frame_ids:
+
+                # 初始化当前帧的数据列表，5个相机，二维
+                frame_color_paths = [None] * 5
+                frame_depth_paths = [None] * 5
+                frame_intrinsics = [None] * 5
+                frame_c2ws = [None] * 5
+
                 # 加载ego位姿
                 ego_pose_file = scene_dir / 'ego_pose' / f'{frame_id:06d}.txt'
                 if not ego_pose_file.exists():
@@ -148,11 +155,23 @@ class WaymoData:
                     # 转换到OpenCV坐标系
                     T_cam_world_opencv = WAYMO2OPENCV @ T_cam_world
 
-                    # 存储数据
-                    scene_color_paths.append(str(img_file))
-                    scene_depth_paths.append(str(depth_file))  # 存储深度图路径
-                    scene_intrinsics.append(cam_intrinsics[cam_id].copy())
-                    scene_c2ws.append(T_cam_world_opencv)
+                    # 将数据存储到当前帧的对应相机位置，二维
+                    frame_color_paths[cam_id] = str(img_file)
+                    frame_depth_paths[cam_id] = str(depth_file)
+                    frame_intrinsics[cam_id] = cam_intrinsics[cam_id].copy()
+                    frame_c2ws[cam_id] = T_cam_world_opencv
+
+                    # # 存储数据，一维
+                    # scene_color_paths.append(str(img_file))
+                    # scene_depth_paths.append(str(depth_file))  # 存储深度图路径
+                    # scene_intrinsics.append(cam_intrinsics[cam_id].copy())
+                    # scene_c2ws.append(T_cam_world_opencv)
+
+                # 将当前帧的数据添加到场景数据中，二维
+                scene_color_paths.append(frame_color_paths)
+                scene_depth_paths.append(frame_depth_paths)
+                scene_intrinsics.append(frame_intrinsics)
+                scene_c2ws.append(frame_c2ws)
 
             if not scene_color_paths:
                 logger.warning(f"场景 {seq} 没有有效帧，跳过")
@@ -168,25 +187,34 @@ class WaymoData:
         self.sequences = [seq for seq in self.sequences if seq not in scenes_with_no_frames]
         logger.info(f"成功加载 {len(self.sequences)} 个场景的数据")
 
-    def get_view(self, sequence, view_idx, resolution):
+    # def get_view(self, sequence, view_idx, resolution):
+    def get_view(self, sequence, frame_idx, cam_idx, resolution):
         if sequence not in self.color_paths:
             raise ValueError(f"无效场景: {sequence}")
 
         if view_idx >= len(self.color_paths[sequence]):
             raise ValueError(f"无效视图索引: {view_idx} (最大 {len(self.color_paths[sequence]) - 1})")
 
+        # 将一维索引转换为二维索引
+        # frame_idx = view_idx // 5
+        # cam_idx = view_idx % 5
+
         # 读取图像
-        img_path = self.color_paths[sequence][view_idx]
+        # img_path = self.color_paths[sequence][view_idx]
+        img_path = self.color_paths[sequence][frame_idx][cam_idx]
         rgb_image = imread_cv2(img_path)
 
         # 新增：读取深度图
-        depth_path = self.depth_paths[sequence][view_idx]
+        # depth_path = self.depth_paths[sequence][view_idx]
+        depth_path = self.depth_paths[sequence][frame_idx][cam_idx]
         depth_data = np.load(depth_path, allow_pickle=True).item()
         depth_map = reconstruct_depth_map(depth_data, rgb_image.shape[:2])  # 原始图像形状 (H, W)
 
         # 获取内参和位姿
-        intrinsics = self.intrinsics[sequence][view_idx]
-        c2w = self.c2ws[sequence][view_idx]
+        # intrinsics = self.intrinsics[sequence][view_idx]
+        # c2w = self.c2ws[sequence][view_idx]
+        intrinsics = self.intrinsics[sequence][frame_idx][cam_idx]
+        c2w = self.c2ws[sequence][frame_idx][cam_idx]
 
         # 调整大小 (同时处理图像和深度图)
         rgb_image, depth_map, intrinsics = crop_resize_if_necessary(
@@ -212,6 +240,51 @@ class WaymoData:
             'sky_mask': sky_mask,  # 新增天空掩码
             'valid_mask': valid_mask  # 新增有效深度掩码
         }
+
+    # def get_view(self, sequence, view_idx, resolution):
+    #     if sequence not in self.color_paths:
+    #         raise ValueError(f"无效场景: {sequence}")
+    #
+    #     if view_idx >= len(self.color_paths[sequence]):
+    #         raise ValueError(f"无效视图索引: {view_idx} (最大 {len(self.color_paths[sequence]) - 1})")
+    #
+    #     # 读取图像
+    #     img_path = self.color_paths[sequence][view_idx]
+    #     rgb_image = imread_cv2(img_path)
+    #
+    #     # 新增：读取深度图
+    #     depth_path = self.depth_paths[sequence][view_idx]
+    #     depth_data = np.load(depth_path, allow_pickle=True).item()
+    #     depth_map = reconstruct_depth_map(depth_data, rgb_image.shape[:2])  # 原始图像形状 (H, W)
+    #
+    #     # 获取内参和位姿
+    #     intrinsics = self.intrinsics[sequence][view_idx]
+    #     c2w = self.c2ws[sequence][view_idx]
+    #
+    #     # 调整大小 (同时处理图像和深度图)
+    #     rgb_image, depth_map, intrinsics = crop_resize_if_necessary(
+    #         rgb_image, depth_map, intrinsics, resolution
+    #     )
+    #
+    #     # 创建有效掩码和天空掩码
+    #     valid_mask = depth_map > 1e-6
+    #     sky_mask = depth_map <= 0.0
+    #
+    #     # 标准化并转换为伪RGB
+    #     depth_rgb = normalize_depth_map(depth_map)
+    #
+    #     return {
+    #         'original_img': rgb_image,
+    #         'depthmap': depth_rgb,  # 现在返回真实的深度图(标准化之后）
+    #         'camera_pose': c2w,
+    #         'camera_intrinsics': intrinsics,
+    #         'dataset': 'waymo',
+    #         'label': f"waymo/{sequence}",
+    #         'instance': f'{view_idx}',
+    #         'is_metric_scale': True,
+    #         'sky_mask': sky_mask,  # 新增天空掩码
+    #         'valid_mask': valid_mask  # 新增有效深度掩码
+    #     }
 
 def get_waymo_dataset(root, stage, resolution, num_epochs_per_epoch=1):
 
