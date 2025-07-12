@@ -2,11 +2,10 @@ import os
 import json
 import torch
 import numpy as np
-from pathlib import Path
 from tqdm import tqdm
 from lightglue import LightGlue, SuperPoint
 from lightglue.utils import load_image, rbd
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ThreadPoolExecutor
 import torch.nn.functional as F
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -14,112 +13,130 @@ base_path = "/home/robot/zyr/waymo/Sprocessed"
 output_dir = "/home/robot/zyr/waymo/coverage"
 os.makedirs(output_dir, exist_ok=True)
 
-# 1. 使用半精度和更激进的配置 - 速度提升≈25%
-extractor = SuperPoint(max_num_keypoints=500).eval().to(device).half()  # 半精度
-matcher = LightGlue(features="superpoint", depth_confidence=0.9, width_confidence=0.95,
-                    flash=True, filter_threshold=0.1).eval().to(device).half()
+# 优化1：使用更低资源消耗的配置
+extractor = SuperPoint(max_num_keypoints=500).eval().to(device).half()  # 减少关键点数量
+matcher = LightGlue(
+    features="superpoint",
+    depth_confidence=0.95,  # 更高置信度减少计算量
+    width_confidence=0.98,
+    flash=True,
+    filter_threshold=0.2,  # 更高阈值减少匹配数量
+    mp=True  # 启用多头注意力的内存优化
+).eval().to(device).half()
 
 
-def extract_features_batch(image_paths, batch_size=8):
-    """2. 批量提取特征 - 速度提升≈40%"""
-    all_features = []
+def extract_features_batch(image_paths, batch_size=16):
+    """优化2：使用更高效的批处理"""
+    features = []
     for i in range(0, len(image_paths), batch_size):
         batch_paths = image_paths[i:i + batch_size]
-        batch_imgs = [load_image(p, resize=640) for p in batch_paths]
-        batch_tensor = torch.stack(batch_imgs).to(device).half()
+        images = [load_image(p, resize=512) for p in batch_paths]  # 减小图像尺寸
+        batch = torch.stack(images).to(device).half()
 
-        with torch.no_grad():
-            feats = extractor.extract(batch_tensor)
-            feats = [rbd(f) for f in feats]
-
-        all_features.extend(feats)
-    return all_features
+        with torch.no_grad(), torch.inference_mode():
+            feats = extractor.extract(batch)
+            features.extend([rbd(f) for f in feats])
+    return features
 
 
-def batch_compute_similarities(ref_feat, target_feats):
-    """3. 批量匹配 - 速度提升≈50%"""
-    if ref_feat["keypoints"].numel() == 0 or ref_feat["keypoints"].size(0) == 0:
+def optimized_matching(ref_feat, target_feats, batch_size=32):
+    """优化3：分块匹配 + 参考帧特征复用"""
+    if ref_feat["keypoints"].numel() == 0:
         return [0.0] * len(target_feats)
 
-    # 准备批量数据
-    ref_feats = {"image0": {
-        "keypoints": ref_feat["keypoints"].unsqueeze(0).repeat(len(target_feats), 1, 1),
-        "descriptors": ref_feat["descriptors"].unsqueeze(0).repeat(len(target_feats), 1, 1)
-    }}
-
-    target_dict = {"keypoints": [], "descriptors": []}
-    for feat in target_feats:
-        if feat["keypoints"].numel() == 0:
-            target_dict["keypoints"].append(torch.empty(0, 2, device=device))
-            target_dict["descriptors"].append(torch.empty(0, 256, device=device))
-        else:
-            target_dict["keypoints"].append(feat["keypoints"])
-            target_dict["descriptors"].append(feat["descriptors"])
-
-    ref_feats["image1"] = {
-        "keypoints": torch.nn.utils.rnn.pad_sequence(
-            target_dict["keypoints"], batch_first=True),
-        "descriptors": torch.nn.utils.rnn.pad_sequence(
-            target_dict["descriptors"], batch_first=True)
+    # 预处理参考帧特征（只做一次）
+    ref_data = {
+        "keypoints": ref_feat["keypoints"].unsqueeze(0),
+        "descriptors": ref_feat["descriptors"].unsqueeze(0)
     }
 
-    # 批量匹配
-    with torch.no_grad():
-        matches = matcher(ref_feats)
-        matches = [rbd(m) for m in matches]
-
-    # 计算相似度
     similarities = []
-    num_kpts_ref = ref_feat["keypoints"].size(0)
+    # 分块处理目标帧
+    for i in range(0, len(target_feats), batch_size):
+        batch_feats = target_feats[i:i + batch_size]
 
-    for m in matches:
-        if m is None or "matches" not in m:
-            similarities.append(0.0)
-            continue
+        # 构建批量目标特征
+        target_data = {
+            "keypoints": torch.nn.utils.rnn.pad_sequence(
+                [f["keypoints"] for f in batch_feats],
+                batch_first=True
+            ),
+            "descriptors": torch.nn.utils.rnn.pad_sequence(
+                [f["descriptors"] for f in batch_feats],
+                batch_first=True
+            )
+        }
 
-        valid_matches = m["matches"][..., 0] > -1
-        num_matches = valid_matches.sum().item()
-        similarity = min((num_matches / max(1, num_kpts_ref)) * 100.0, 100.0)
-        similarities.append(similarity)
+        # 批量匹配
+        with torch.no_grad():
+            matches = matcher({"image0": ref_data, "image1": target_data})
+            matches = [rbd(m) for m in matches]
+
+        # 计算相似度
+        for m in matches:
+            num_matches = (m["matches"][..., 0] > -1).sum().item() if m else 0
+            sim = min(num_matches / max(1, ref_feat["keypoints"].size(0)) * 100, 100.0)
+            similarities.append(sim)
 
     return similarities
 
 
 def process_camera(camera_images):
+    """优化4：内存优化 + 流式处理"""
     camera_images.sort(key=lambda x: x[0])
     n = len(camera_images)
-    coverage_matrix = np.zeros((n, n), dtype=np.float32)
-    np.fill_diagonal(coverage_matrix, 100.0)  # 对角线设为100%
+    coverage_matrix = np.zeros((n, n), dtype=np.float16)  # 使用半精度存储
+    np.fill_diagonal(coverage_matrix, 100.0)
 
-    # 批量提取所有特征 - 只提取一次
+    # 流式提取特征（不一次性存储所有特征）
     image_paths = [img_path for _, img_path in camera_images]
-    features_list = extract_features_batch(image_paths)
-    features_dict = {idx: feat for idx, feat in enumerate(features_list)}
+    feature_cache = {}
 
-    # 4. 窗口并行计算 - 速度提升≈70%
-    batch_size = 16  # 根据GPU内存调整
+    # 优化5：使用滑动窗口缓存
+    WINDOW_SIZE = 30  # 窗口大小
+    current_window = []
+
     for i in tqdm(range(n), desc="Processing frames", leave=False):
-        start_idx = max(0, i - 30)
-        end_idx = min(n, i + 31)
+        # 管理滑动窗口
+        if i >= WINDOW_SIZE * 2:
+            oldest = i - WINDOW_SIZE * 2
+            if oldest in feature_cache:
+                del feature_cache[oldest]
 
-        # 跳过自身
+        # 按需提取特征
+        if i not in feature_cache:
+            img = load_image(image_paths[i], resize=512)
+            with torch.no_grad():
+                feats = extractor.extract(img.to(device).half())
+                feature_cache[i] = rbd(feats)
+
+        # 确定时间窗口
+        start_idx = max(0, i - WINDOW_SIZE)
+        end_idx = min(n, i + WINDOW_SIZE + 1)
         window_indices = [j for j in range(start_idx, end_idx) if j != i]
-        if not window_indices:
-            continue
 
-        # 准备批量目标特征
-        target_feats = [features_dict[j] for j in window_indices]
-        similarities = batch_compute_similarities(features_dict[i], target_feats)
+        # 获取窗口内特征
+        target_feats = []
+        for j in window_indices:
+            if j not in feature_cache:
+                img = load_image(image_paths[j], resize=512)
+                with torch.no_grad():
+                    feats = extractor.extract(img.to(device).half())
+                    feature_cache[j] = rbd(feats)
+            target_feats.append(feature_cache[j])
 
-        # 填充结果矩阵
-        for j_idx, j in enumerate(window_indices):
-            coverage_matrix[i, j] = similarities[j_idx]
+        # 批量匹配
+        similarities = optimized_matching(feature_cache[i], target_feats)
+
+        # 更新矩阵
+        for idx, j in enumerate(window_indices):
+            coverage_matrix[i, j] = similarities[idx]
 
     return coverage_matrix.tolist()
 
 
 def process_scene(scene_path, scene_name):
-    """使用并行处理单个场景的所有相机"""
+    """优化6：使用线程级并行 + GPU共享"""
     image_dir = os.path.join(scene_path, "images")
     if not os.path.exists(image_dir):
         return
@@ -136,8 +153,8 @@ def process_scene(scene_path, scene_name):
     output_file = os.path.join(output_dir, f"{scene_name}.json")
     result = {"scene": scene_name, "cameras": {}}
 
-    # 5. 并行处理所有相机
-    with ProcessPoolExecutor(max_workers=min(4, os.cpu_count())) as executor:
+    # 优化7：使用线程池替代进程池
+    with ThreadPoolExecutor(max_workers=min(4, os.cpu_count())) as executor:
         futures = {}
         for cam_id, images in camera_images.items():
             future = executor.submit(process_camera, images)
@@ -152,8 +169,8 @@ def process_scene(scene_path, scene_name):
             }
 
     with open(output_file, "w") as f:
-        json.dump(result, f)
-    print(f"Saved coverage matrices for all cameras in scene {scene_name}")
+        json.dump(result, f, separators=(',', ':'))  # 减小JSON文件大小
+    print(f"Saved coverage matrices for scene {scene_name}")
 
 
 if __name__ == "__main__":
