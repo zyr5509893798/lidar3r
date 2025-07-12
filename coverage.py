@@ -19,20 +19,74 @@ matcher = LightGlue(features="superpoint", depth_confidence=-1, width_confidence
 
 def compute_similarity(feats0, feats1):
     """计算两幅图像之间的相似度百分比"""
+    # 处理空特征的情况
+    if (feats0["keypoints"].numel() == 0 or
+            feats1["keypoints"].numel() == 0 or
+            feats0["keypoints"].shape[0] == 0 or
+            feats1["keypoints"].shape[0] == 0):
+        return 0.0
+
+    # 确保张量维度兼容
+    keypoints0 = feats0["keypoints"]
+    keypoints1 = feats1["keypoints"]
+
+    # 添加batch维度 [N, 2] => [1, N, 2]
+    if keypoints0.dim() == 2:
+        keypoints0 = keypoints0.unsqueeze(0)
+    if keypoints1.dim() == 2:
+        keypoints1 = keypoints1.unsqueeze(0)
+
+    # 创建新的特征字典
+    safe_feats0 = {"keypoints": keypoints0}
+    safe_feats1 = {"keypoints": keypoints1}
+
+    # 添加其他必要字段
+    for key in ["descriptors", "image_size", "scores"]:
+        if key in feats0:
+            safe_feats0[key] = feats0[key].unsqueeze(0) if feats0[key].dim() == 2 else feats0[key]
+        if key in feats1:
+            safe_feats1[key] = feats1[key].unsqueeze(0) if feats1[key].dim() == 2 else feats1[key]
+
     with torch.no_grad():
-        matches = matcher({"image0": feats0, "image1": feats1})
-        matches = rbd(matches)
+        try:
+            matches = matcher({"image0": safe_feats0, "image1": safe_feats1})
+            matches = rbd(matches)
+        except Exception as e:
+            print(f"Matching error: {str(e)}")
+            return 0.0
 
     if matches is None or "matches" not in matches:
         return 0.0
 
+    if matches["matches"].shape[0] == 0:
+        return 0.0
+
     valid_matches = matches["matches"][..., 0] > -1
     num_matches = valid_matches.sum().item()
-    num_kpts_ref = feats0["keypoints"].shape[0]
+
+    # 使用原始关键点计数（无batch维度）
+    num_kpts_ref = keypoints0.shape[0] if keypoints0.dim() == 2 else keypoints0.shape[1]
 
     if num_kpts_ref == 0:
         return 0.0
-    return (num_matches / num_kpts_ref) * 100.0
+
+    return min((num_matches / num_kpts_ref) * 100.0, 100.0)  # 确保不超过100%
+# def compute_similarity(feats0, feats1):
+#     """计算两幅图像之间的相似度百分比"""
+#     with torch.no_grad():
+#         matches = matcher({"image0": feats0, "image1": feats1})
+#         matches = rbd(matches)
+#
+#     if matches is None or "matches" not in matches:
+#         return 0.0
+#
+#     valid_matches = matches["matches"][..., 0] > -1
+#     num_matches = valid_matches.sum().item()
+#     num_kpts_ref = feats0["keypoints"].shape[0]
+#
+#     if num_kpts_ref == 0:
+#         return 0.0
+#     return (num_matches / num_kpts_ref) * 100.0
 
 
 def process_camera(camera_images):
@@ -44,16 +98,42 @@ def process_camera(camera_images):
     # 初始化相机相似度矩阵
     coverage_matrix = [[0.0] * n for _ in range(n)]
 
-    # 预提取特征
+    # # 预提取特征
+    # features = {}
+    # for idx, (frame_id, img_path) in enumerate(camera_images):
+    #     try:
+    #         img = load_image(img_path, resize=640)
+    #         feats = extractor.extract(img.to(device))
+    #         features[idx] = rbd(feats)
+    #     except Exception as e:
+    #         print(f"Error processing {img_path}: {str(e)}")
+    #         features[idx] = None
+    # 预提取特征 (添加额外处理)
     features = {}
     for idx, (frame_id, img_path) in enumerate(camera_images):
         try:
             img = load_image(img_path, resize=640)
             feats = extractor.extract(img.to(device))
-            features[idx] = rbd(feats)
+            feats = rbd(feats)
+
+            # 确保特征字典有基本结构
+            for key in ["keypoints", "descriptors"]:
+                if key not in feats:
+                    feats[key] = torch.empty((0, 0), device=device)
+
+            # 如果关键点是空的，创建空张量保持维度
+            if feats["keypoints"].ndim == 1:
+                feats["keypoints"] = torch.empty((0, 2), device=device)
+
+            features[idx] = feats
+
         except Exception as e:
             print(f"Error processing {img_path}: {str(e)}")
-            features[idx] = None
+            # 创建空特征作为占位符
+            features[idx] = {
+                "keypoints": torch.empty((0, 2), device=device),
+                "descriptors": torch.empty((0, 0), device=device)
+            }
 
     # 计算相似度
     for i in range(n):
