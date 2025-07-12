@@ -6,6 +6,8 @@ from tqdm import tqdm
 from lightglue import LightGlue, SuperPoint
 from lightglue.utils import load_image, rbd
 from concurrent.futures import ThreadPoolExecutor
+import csv
+from datetime import datetime
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 base_path = "/home/robot/zyr/waymo/Sprocessed"
@@ -26,50 +28,138 @@ matcher = LightGlue(
 # 启用CUDA优化
 torch.backends.cudnn.benchmark = True
 
+# 创建错误日志文件
+error_log_path = os.path.join(output_dir, "problem_images.csv")
+error_log_header = ["scene", "camera", "image_path", "error_type", "first_occurrence"]
 
-def extract_features_batch(image_paths, batch_size=16):
+# 初始化错误日志
+if not os.path.exists(error_log_path):
+    with open(error_log_path, "w", newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow(error_log_header)
+
+# 全局集合记录已报告的问题图像
+reported_problem_images = set()
+
+
+def log_problem_image(scene, camera, img_path, error_type):
+    """记录问题图像到CSV文件（每个图像只记录一次）"""
+    global reported_problem_images
+
+    # 创建唯一标识符
+    identifier = f"{scene}_{camera}_{img_path}"
+
+    # 如果已经报告过，直接返回
+    if identifier in reported_problem_images:
+        return
+
+    # 添加到已报告集合
+    reported_problem_images.add(identifier)
+
+    # 写入文件
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(error_log_path, "a", newline='') as f:
+        writer = csv.writer(f)
+        writer.writerow([scene, camera, img_path, error_type, timestamp])
+
+    # 在控制台输出简洁信息
+    print(f"标记问题图像: {os.path.basename(img_path)} | {error_type}")
+
+
+def extract_features_batch(image_paths, scene, camera):
     """批量特征提取函数"""
     features = []
     for img_path in image_paths:
-        img = load_image(img_path, resize=512).to(device)
-        img = img.unsqueeze(0)  # 添加批次维度 [1, 1, H, W]
+        try:
+            img = load_image(img_path, resize=512).to(device)
+            img = img.unsqueeze(0)  # 添加批次维度 [1, 1, H, W]
 
-        with torch.no_grad(), torch.inference_mode():
-            feats = extractor.extract(img)
-            features.append(rbd(feats))
+            with torch.no_grad(), torch.inference_mode():
+                feats = extractor.extract(img)
+
+                # 关键点数量检查
+                if feats["keypoints"].numel() == 0:
+                    # 记录问题图像
+                    log_problem_image(scene, camera, img_path, "no_keypoints")
+                    # 创建空特征
+                    feats = {
+                        "keypoints": torch.empty((0, 2), device=device),
+                        "descriptors": torch.empty((1, 256, 0), device=device),
+                        "scores": torch.empty(0, device=device)
+                    }
+                # 维度标准化
+                elif feats["descriptors"].size(1) != 256:
+                    # 记录问题图像
+                    log_problem_image(scene, camera, img_path, f"dimension_mismatch_{feats['descriptors'].size(1)}")
+                    feats = align_features(feats)
+
+                features.append(rbd(feats))
+        except Exception as e:
+            # 记录问题图像
+            log_problem_image(scene, camera, img_path, f"extraction_error_{str(e)}")
+            # 创建空特征作为回退
+            empty_feats = {
+                "keypoints": torch.empty((0, 2), device=device),
+                "descriptors": torch.empty((1, 256, 0), device=device),
+                "scores": torch.empty(0, device=device)
+            }
+            features.append(empty_feats)
 
     return features
 
 
-def optimized_matching(ref_feat, target_feats, batch_size=32):
-    """更安全的匹配函数 - 解决索引越界问题"""
+def align_features(feats, target_dim=256):
+    """对齐特征到目标维度"""
+    current_dim = feats["descriptors"].size(1)
+    descriptors = feats["descriptors"]
+
+    # 维度不足时填充零
+    if current_dim < target_dim:
+        pad = torch.zeros(descriptors.size(0), target_dim - current_dim,
+                          descriptors.size(2), device=device, dtype=descriptors.dtype)
+        feats["descriptors"] = torch.cat([descriptors, pad], dim=1)
+    # 维度过多时截断
+    elif current_dim > target_dim:
+        feats["descriptors"] = descriptors[:, :target_dim, :]
+
+    return feats
+
+
+def optimized_matching(ref_feat, target_feats, ref_img_path, target_img_paths):
+    """安全的匹配函数 - 跳过问题图像对"""
+    # 处理空参考特征
     if ref_feat["keypoints"].numel() == 0:
         return [0.0] * len(target_feats)
 
-    # 确保参考帧特征有正确的形状
+    # 准备参考帧特征
     ref_keypoints = ref_feat["keypoints"].unsqueeze(0)  # [1, N, 2]
     ref_descriptors = ref_feat["descriptors"].unsqueeze(0)  # [1, D, N]
 
+    # 确保描述符维度为256
+    if ref_descriptors.size(1) != 256:
+        ref_descriptors = ref_descriptors[:, :256, :]
+
     similarities = []
 
-    # 逐个处理目标帧 - 更安全的方法
-    for target_feat in target_feats:
+    for idx, target_feat in enumerate(target_feats):
+        target_img_path = target_img_paths[idx]
+
+        # 处理空目标特征
         if target_feat["keypoints"].numel() == 0:
             similarities.append(0.0)
             continue
 
-        # 准备目标特征
+        # 准备目标帧特征
         target_keypoints = target_feat["keypoints"].unsqueeze(0)  # [1, M, 2]
         target_descriptors = target_feat["descriptors"].unsqueeze(0)  # [1, D, M]
 
-        # 确保描述子维度一致
-        if ref_descriptors.size(1) != target_descriptors.size(1):
-            # 如果维度不匹配，调整参考帧描述子
-            ref_descriptors = ref_descriptors[:, :target_descriptors.size(1), :]
+        # 确保描述符维度为256
+        if target_descriptors.size(1) != 256:
+            target_descriptors = target_descriptors[:, :256, :]
 
-        # 单个匹配
-        with torch.no_grad(), torch.inference_mode():
-            try:
+        # 尝试安全匹配
+        try:
+            with torch.no_grad(), torch.inference_mode():
                 matches = matcher({
                     "image0": {
                         "keypoints": ref_keypoints,
@@ -81,34 +171,40 @@ def optimized_matching(ref_feat, target_feats, batch_size=32):
                     }
                 })
 
-                matches = rbd(matches) if matches is not None else None
-            except Exception as e:
-                print(f"Matching error: {str(e)}")
-                matches = None
+                # 处理匹配结果
+                if matches is None:
+                    num_matches = 0
+                else:
+                    matches = rbd(matches)
+                    if "matches" not in matches or matches["matches"].size(0) == 0:
+                        num_matches = 0
+                    else:
+                        num_matches = matches["matches"].size(0)
 
-        # 计算相似度
-        num_kpts_ref = ref_feat["keypoints"].size(0)
-        if matches is None or "matches" not in matches:
+                # 计算相似度
+                num_kpts_ref = ref_feat["keypoints"].size(0)
+                sim = min(num_matches / max(1, num_kpts_ref) * 100.0, 100.0) if num_kpts_ref > 0 else 0.0
+                similarities.append(sim)
+
+        except Exception as e:
+            # 跳过问题图像对，直接返回0
             similarities.append(0.0)
-        else:
-            valid_matches = matches["matches"][..., 0] > -1
-            num_matches = valid_matches.sum().item()
-            sim = min(num_matches / max(1, num_kpts_ref) * 100.0, 100.0)
-            similarities.append(sim)
 
     return similarities
 
 
-def process_camera(camera_images):
+def process_camera(camera_images, scene, camera_id):
     """处理单个相机"""
     camera_images.sort(key=lambda x: x[0])
     n = len(camera_images)
     coverage_matrix = np.zeros((n, n), dtype=np.float16)
     np.fill_diagonal(coverage_matrix, 100.0)
 
-    # 提取所有特征
+    # 提取图像路径列表
     image_paths = [img_path for _, img_path in camera_images]
-    features = extract_features_batch(image_paths)
+
+    # 提取所有特征（并记录问题图像）
+    features = extract_features_batch(image_paths, scene, camera_id)
     features_dict = {idx: feat for idx, feat in enumerate(features)}
 
     # 使用窗口处理
@@ -122,11 +218,15 @@ def process_camera(camera_images):
         if not window_indices:
             continue
 
-        # 准备目标特征
+        # 准备目标特征和路径
         target_feats = [features_dict[j] for j in window_indices]
+        target_paths = [image_paths[j] for j in window_indices]
 
         # 批量匹配
-        similarities = optimized_matching(features_dict[i], target_feats)
+        similarities = optimized_matching(
+            features_dict[i], target_feats,
+            image_paths[i], target_paths
+        )
 
         # 填充结果矩阵
         for idx, j in enumerate(window_indices):
@@ -158,7 +258,7 @@ def process_scene(scene_path, scene_name):
     with ThreadPoolExecutor(max_workers=min(5, os.cpu_count())) as executor:
         futures = {}
         for cam_id, images in camera_images.items():
-            future = executor.submit(process_camera, images)
+            future = executor.submit(process_camera, images, scene_name, cam_id)
             futures[future] = cam_id
 
         for future in tqdm(futures, desc=f"Processing cameras in {scene_name}"):
@@ -188,6 +288,8 @@ if __name__ == "__main__":
     # 添加性能优化
     torch.set_float32_matmul_precision('high')  # 对于Ampere架构GPU
 
-    for scene_name in tqdm(scene_dirs, desc="Total Scenes"):
-        scene_path = os.path.join(base_path, scene_name)
-        process_scene(scene_path, scene_name)
+    # for scene_name in tqdm(scene_dirs, desc="Total Scenes"):
+    #     scene_path = os.path.join(base_path, scene_name)
+    #     process_scene(scene_path, scene_name)
+    scene_path = os.path.join(base_path, "245")
+    process_scene(scene_path, "245")
