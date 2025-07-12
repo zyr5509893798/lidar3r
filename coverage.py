@@ -282,14 +282,21 @@ if __name__ == "__main__":
     scene_dirs = [d for d in os.listdir(base_path)
                   if os.path.isdir(os.path.join(base_path, d))]
 
+    # 获取已经处理完成的场景（通过输出文件判断）
+    processed_scenes = set()
+    for fname in os.listdir(output_dir):
+        if fname.endswith(".json"):
+            processed_scenes.add(fname.rsplit('.', 1)[0])  # 移除后缀
+
     # 设置线程数
     torch.set_num_threads(2)
+    torch.set_float32_matmul_precision('high')
 
-    # 添加性能优化
-    torch.set_float32_matmul_precision('high')  # 对于Ampere架构GPU
+    for scene_name in tqdm(scene_dirs, desc="Total Scenes"):
+        # 跳过已处理的场景
+        if scene_name in processed_scenes:
+            print(f"跳过已处理场景: {scene_name}")
+            continue
 
-    # for scene_name in tqdm(scene_dirs, desc="Total Scenes"):
-    #     scene_path = os.path.join(base_path, scene_name)
-    #     process_scene(scene_path, scene_name)
-    scene_path = os.path.join(base_path, "245")
-    process_scene(scene_path, "245")
+        scene_path = os.path.join(base_path, scene_name)
+        process_scene(scene_path, scene_name)
