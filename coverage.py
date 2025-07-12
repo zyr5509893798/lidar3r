@@ -141,8 +141,8 @@ def process_camera(camera_images):
             continue
 
         # 确定时间窗口 (±15帧)
-        start_idx = max(0, i - 15)
-        end_idx = min(n, i + 16)
+        start_idx = max(0, i - 30)
+        end_idx = min(n, i + 31)
 
         for j in range(start_idx, end_idx):
             if i == j:
