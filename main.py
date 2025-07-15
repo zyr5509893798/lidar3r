@@ -83,11 +83,11 @@ class MAST3RGaussians(L.LightningModule):
 
         self.save_hyperparameters()
 
-    def forward(self, view1):
+    def forward(self, view1, view2):
 
         # Freeze the encoder and decoder
         with torch.no_grad():
-            (shape1, shape2), (feat1, feat2), (pos1, pos2) = self.encoder._encode_symmetrized(view1)
+            (shape1, shape2), (feat1, feat2), (pos1, pos2) = self.encoder._encode_symmetrized(view1, view2)
             dec1, dec2 = self.encoder._decoder(feat1, pos1, feat2, pos2)
 
         # Train the downstream heads
@@ -117,10 +117,11 @@ class MAST3RGaussians(L.LightningModule):
     def training_step(self, batch, batch_idx):
 
         _, _, h, w = batch["context"][0]["img"].shape
-        view1 = batch['context'][0]  # 单图输入，注意这里要取出第一个字典，这里原本是[view1, view2]，现在长这样[view1]，但是我们要把view1取出来，而不是整个列表
+        view1, view2 = batch['context']  # 现在是双图输入了
+        # 单图输入，注意这里要取出第一个字典，这里原本是[view1, view2]，现在长这样[view1]，但是我们要把view1取出来，而不是整个列表
 
         # Predict using the encoder/decoder and calculate the loss
-        pred1, pred2 = self.forward(view1)
+        pred1, pred2 = self.forward(view1, view2)
         color, _ = self.decoder(batch, pred1, pred2, (h, w))
 
         # Calculate losses
@@ -145,10 +146,10 @@ class MAST3RGaussians(L.LightningModule):
     def validation_step(self, batch, batch_idx):
 
         _, _, h, w = batch["context"][0]["img"].shape
-        view1 = batch['context'][0]
+        view1, view2 = batch['context']  # 现在是双图输入了
 
         # Predict using the encoder/decoder and calculate the loss
-        pred1, pred2 = self.forward(view1)
+        pred1, pred2 = self.forward(view1, view2)
         color, _ = self.decoder(batch, pred1, pred2, (h, w))
 
         # Calculate losses
@@ -164,12 +165,12 @@ class MAST3RGaussians(L.LightningModule):
     def test_step(self, batch, batch_idx):
 
         _, _, h, w = batch["context"][0]["img"].shape
-        view1 = batch['context'][0]
+        view1, view2 = batch['context']  # 现在是双图输入了
         num_targets = len(batch['target'])
 
         # Predict using the encoder/decoder and calculate the loss
         with self.benchmarker.time("encoder"):
-            pred1, pred2 = self.forward(view1)
+            pred1, pred2 = self.forward(view1, view2)
         with self.benchmarker.time("decoder", num_calls=num_targets):
             color, _ = self.decoder(batch, pred1, pred2, (h, w))
 
@@ -377,7 +378,7 @@ def run_experiment(config):
         batch_size=config.data.batch_size,
         num_workers=config.data.num_workers,
     )
-    new_save_dir =  original_save_dir # 这里没必要搞那些复杂的
+    new_save_dir = original_save_dir # 这里没必要搞那些复杂的
     os.makedirs(new_save_dir, exist_ok=True)
     model.config.save_dir = new_save_dir
 

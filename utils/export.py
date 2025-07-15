@@ -41,8 +41,10 @@ class SaveBatchData(L.Callback):
 
         # Run the batch through the model again
         _, _, h, w = batch["context"][0]["img"].shape
-        view1 = batch['context'][0]
-        pred1, pred2 = pl_module.forward(view1)
+        # view1 = batch['context'][0]
+        # pred1, pred2 = pl_module.forward(view1)
+        view1, view2 = batch['context']
+        pred1, pred2 = pl_module.forward(view1, view2)
         color, depth = pl_module.decoder(batch, pred1, pred2, (h, w))
         mask = loss_mask.calculate_loss_mask(batch)
 
@@ -51,7 +53,8 @@ class SaveBatchData(L.Callback):
             self.save_dir,
             f"{prefix}_epoch_{trainer.current_epoch}_batch_{batch_idx}"
         )
-        log_batch_files(batch, color, depth, mask, view1, pred1, pred2, save_dir)
+        # log_batch_files(batch, color, depth, mask, view1, pred1, pred2, save_dir)
+        log_batch_files(batch, color, depth, mask, view1, view2, pred1, pred2, save_dir)
 
 
 def save_as_ply(pred1, pred2, save_path):
@@ -123,12 +126,14 @@ def save_as_ply(pred1, pred2, save_path):
     scene.write(save_path)
 
 
-def save_3d(view1, pred1, pred2, save_dir, as_pointcloud=True, all_points=True):
+def save_3d(view1, view2, pred1, pred2, save_dir, as_pointcloud=True, all_points=True):
     """Save the 3D points as a point cloud or as a mesh. Adapted from DUSt3R"""
 
     os.makedirs(save_dir, exist_ok=True)
     batch_size = pred1["pts3d"].shape[0]
-    views = [view1]
+    # views = [view1]
+    views = [view1, view2]
+
 
     for b in range(batch_size):
 
@@ -161,7 +166,7 @@ def save_3d(view1, pred1, pred2, save_dir, as_pointcloud=True, all_points=True):
 
 
 @torch.no_grad()
-def log_batch_files(batch, color, depth, mask, view1, pred1, pred2, save_dir, should_save_3d=False):
+def log_batch_files(batch, color, depth, mask, view1, view2, pred1, pred2, save_dir, should_save_3d=False):
     '''Save all the relevant debug files for a batch'''
 
     os.makedirs(save_dir, exist_ok=True)
@@ -171,8 +176,10 @@ def log_batch_files(batch, color, depth, mask, view1, pred1, pred2, save_dir, sh
 
     # Save the 3D points as a point cloud and as a mesh (disabled)
     if should_save_3d:
-        save_3d(view1, pred1, pred2, os.path.join(save_dir, "3d_mesh"), as_pointcloud=False)
-        save_3d(view1, pred1, pred2, os.path.join(save_dir, "3d_pointcloud"), as_pointcloud=True)
+        # save_3d(view1, pred1, pred2, os.path.join(save_dir, "3d_mesh"), as_pointcloud=False)
+        # save_3d(view1, pred1, pred2, os.path.join(save_dir, "3d_pointcloud"), as_pointcloud=True)
+        save_3d(view1, view2, pred1, pred2, os.path.join(save_dir, "3d_mesh"), as_pointcloud=False)
+        save_3d(view1, view2, pred1, pred2, os.path.join(save_dir, "3d_pointcloud"), as_pointcloud=True)
 
     # Save the color, depth and valid masks for the input context images
     context_images = torch.stack([view["img"] for view in batch["context"]], dim=1)

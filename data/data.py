@@ -44,14 +44,14 @@ def crop_resize_if_necessary(image, depthmap, intrinsics, resolution):
 
 class DUST3RSplattingDataset(torch.utils.data.Dataset):
 
-    def __init__(self, data, resolution, num_epochs_per_epoch=1, alpha=0.3, beta=0.3):
+    def __init__(self, data, coverage, resolution, num_epochs_per_epoch=1, alpha=0.3, beta=0.3):
 
         super(DUST3RSplattingDataset, self).__init__()
         self.data = data
 
         self.num_context_views = 2
         self.num_target_views = 3
-
+        self.coverage = coverage
         self.resolution = resolution
         self.transform = ImgNorm
         self.org_transform = torchvision.transforms.ToTensor()
@@ -211,9 +211,9 @@ class DUST3RSplattingTestDataset(torch.utils.data.Dataset):
         self.transform = ImgNorm
         self.org_transform = torchvision.transforms.ToTensor()
 
-    def get_view(self, sequence, c_view):
+    def get_view(self, sequence, c_view, camera_id):
 
-        view = self.data.get_view(sequence, c_view, self.resolution)
+        view = self.data.get_view(sequence, c_view, camera_id, self.resolution)
 
         # Transform the input
         view['img'] = self.transform(view['original_img'])
@@ -229,17 +229,17 @@ class DUST3RSplattingTestDataset(torch.utils.data.Dataset):
 
     def __getitem__(self, idx):
 
-        # sequence, c_view_1, c_view_2, target_view = self.samples[idx]
-        sequence, c_view_1 = self.samples[idx]
+        sequence, c_view_1, c_view_2, target_view, camera_id = self.samples[idx]
+        # sequence, c_view_1 = self.samples[idx]
+        # 这里修改成合适的结构，包括view2和target view和camera_id
+        c_view_1, c_view_2, target_view, camera_id = int(c_view_1), int(c_view_2), int(target_view), int(camera_id)
+        # c_view_1 = int(c_view_1)
 
-        # c_view_1, c_view_2, target_view = int(c_view_1), int(c_view_2), int(target_view)
-        c_view_1 = int(c_view_1)
+        fetched_c_view_1 = self.get_view(sequence, c_view_1, camera_id)
+        fetched_c_view_2 = self.get_view(sequence, c_view_2, camera_id)
+        fetched_target_view = self.get_view(sequence, target_view, camera_id)
 
-        fetched_c_view_1 = self.get_view(sequence, c_view_1)
-        # fetched_c_view_2 = self.get_view(sequence, c_view_2)
-        # fetched_target_view = self.get_view(sequence, target_view)
-
-        views = {"context": [fetched_c_view_1], "target": [fetched_c_view_1], "scene": sequence}
+        views = {"context": [fetched_c_view_1, fetched_c_view_2], "target": [fetched_target_view], "scene": sequence}
 
         return views
 
