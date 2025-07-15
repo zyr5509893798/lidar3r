@@ -195,24 +195,16 @@ class WaymoData:
         if frame_idx >= len(self.color_paths[sequence]):
             raise ValueError(f"无效视图索引: {frame_idx} (最大 {len(self.color_paths[sequence]) - 1})")
 
-        # 将一维索引转换为二维索引
-        # frame_idx = view_idx // 5
-        # cam_idx = view_idx % 5
-
         # 读取图像
-        # img_path = self.color_paths[sequence][view_idx]
         img_path = self.color_paths[sequence][frame_idx][cam_idx]
         rgb_image = imread_cv2(img_path)
 
-        # 新增：读取深度图
-        # depth_path = self.depth_paths[sequence][view_idx]
+        # 读取深度图
         depth_path = self.depth_paths[sequence][frame_idx][cam_idx]
         depth_data = np.load(depth_path, allow_pickle=True).item()
-        depth_map = reconstruct_depth_map(depth_data, rgb_image.shape[:2])  # 原始图像形状 (H, W)
+        depth_map = reconstruct_depth_map(depth_data, rgb_image.shape[:2])  # (H, W)
 
         # 获取内参和位姿
-        # intrinsics = self.intrinsics[sequence][view_idx]
-        # c2w = self.c2ws[sequence][view_idx]
         intrinsics = self.intrinsics[sequence][frame_idx][cam_idx]
         c2w = self.c2ws[sequence][frame_idx][cam_idx]
 
@@ -222,15 +214,18 @@ class WaymoData:
         )
 
         # 创建有效掩码和天空掩码
-        valid_mask = depth_map > 1e-6
+        valid_mask = (depth_map > 1e-6).astype(np.float32)  # 转换为float32
         sky_mask = depth_map <= 0.0
 
-        # 标准化并转换为伪RGB
-        depth_rgb = normalize_depth_map(depth_map)
+        # 标准化深度图
+        normalized_depth = normalize_depth_map(depth_map)  # (H, W)
+
+        # 创建两通道深度图 [2, H, W]
+        depth_two_channel = np.stack([normalized_depth, valid_mask], axis=0)  # 直接堆叠为 [2, H, W]
 
         return {
             'original_img': rgb_image,
-            'depthmap': depth_rgb,  # 现在返回真实的深度图(标准化之后）
+            'depthmap': depth_two_channel,  # 形状 [2, H, W]
             'camera_pose': c2w,
             'camera_intrinsics': intrinsics,
             'dataset': 'waymo',
@@ -238,10 +233,11 @@ class WaymoData:
             'instance': f'{frame_idx}',
             'camera_id': f"{cam_idx}",
             'is_metric_scale': True,
-            'sky_mask': sky_mask,  # 新增天空掩码
-            'valid_mask': valid_mask  # 新增有效深度掩码
+            'sky_mask': sky_mask,
+            'valid_mask': valid_mask  # 仍然是二维数组 (H, W)
         }
 
+# 下面是原始get_view，没有相机id
     # def get_view(self, sequence, view_idx, resolution):
     #     if sequence not in self.color_paths:
     #         raise ValueError(f"无效场景: {sequence}")
@@ -333,36 +329,55 @@ def get_waymo_test_dataset(root, resolution, use_every_n_sample=100):
 
     return dataset
 
-# 从压缩格式重建深度图 (从第二段代码移植)
+# 深度处理旧代码的问题：H和W被转置了！图都是躺着的。另外我们现在需要2维，带上mask
+def normalize_depth_map(depth_map, max_depth=100.0):
+    """
+    标准化深度图：
+    1. 截断到最大深度值
+    2. 归一化到[0, 1]范围
+    返回形状为 (H, W) 的二维数组
+    """
+    depth_map = np.clip(depth_map, 0, max_depth)
+    normalized = depth_map / max_depth
+    return normalized  # 返回二维数组 (H, W)
+
 def reconstruct_depth_map(depth_data, original_shape):
-    """
-    从压缩格式重建深度图
-    :param depth_data: 从.npy文件加载的字典数据
-    :param original_shape: 原始深度图形状 (H, W)
-    :return: 重建后的深度图 (H, W)
-    """
+    """从压缩格式重建深度图"""
     depth_map = np.zeros(original_shape, dtype=np.float32)
     mask = depth_data['mask']
     values = depth_data['value']
     depth_map[mask] = values
     return depth_map
 
-
-# 深度图标准化函数
-def normalize_depth_map(depth_map, max_depth=100.0):
-    """.astype(np.float32)
-    标准化深度图：
-    1. 截断到最大深度值
-    2. 归一化到[0, 1]范围
-    3. 转换为三通道伪RGB
-    """
-    # 截断深度值
-    depth_map = np.clip(depth_map, 0, max_depth)
-
-    # 归一化到[0, 1]
-    normalized = depth_map / max_depth
-    return np.moveaxis(normalized, -1, 0)
-    # # 转换为三通道伪RGB
+# # 从压缩格式重建深度图 (从第二段代码移植)
+# def reconstruct_depth_map(depth_data, original_shape):
+#     """
+#     从压缩格式重建深度图
+#     :param depth_data: 从.npy文件加载的字典数据
+#     :param original_shape: 原始深度图形状 (H, W)
+#     :return: 重建后的深度图 (H, W)
+#     """
+#     depth_map = np.zeros(original_shape, dtype=np.float32)
+#     mask = depth_data['mask']
+#     values = depth_data['value']
+#     depth_map[mask] = values
+#     return depth_map
+#
+#
+# # 深度图标准化函数
+# def normalize_depth_map(depth_map, max_depth=100.0):
+#     """.astype(np.float32)
+#     标准化深度图：
+#     1. 截断到最大深度值
+#     2. 归一化到[0, 1]范围
+#     """
+#     # 截断深度值
+#     depth_map = np.clip(depth_map, 0, max_depth)
+#
+#     # 归一化到[0, 1]
+#     normalized = depth_map / max_depth
+#     return np.moveaxis(normalized, -1, 0)
+#     # # 转换为三通道伪RGB
     # rgb = np.stack([normalized] * 3, axis=-1)  # 形状变为 [H, W, 3]
     #
     # return np.moveaxis(rgb, -1, 0) # 3 H W，我们最终需要的格式。
