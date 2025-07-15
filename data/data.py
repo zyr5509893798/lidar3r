@@ -174,7 +174,7 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
                 continue
             overlap_max = max(   # 测试帧要与至少一个输入图有一定的重合度
                 self.coverage[sequence][camera_id][first_context_view][frame],
-                # self.coverage[sequence][second_context_view][frame]
+                self.coverage[sequence][camera_id][second_context_view][frame]
             )
             if overlap_max > target_overlap_threshold:
                 valid_target_views.append(frame)

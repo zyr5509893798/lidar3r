@@ -5,9 +5,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-import pow3r.tools.path_to_dust3r
 from dust3r.patch_embed import PatchEmbedDust3R, ManyAR_PatchEmbed  # noqa
-from croco.models.blocks import Mlp
+from ..dust3r.croco.models.blocks import Mlp
 
 
 def get_patch_embed(patch_embed_cls, img_size, patch_size, enc_embed_dim, in_chans=3):
@@ -49,7 +48,7 @@ class PixelUnshuffle (nn.Module):
         else:
             return F.pixel_unshuffle(input, self.downscale_factor)
 
-class PatchEmbed_Mlp (PatchEmbedDust3R):
+class PatchEmbedDust3R_Mlp (PatchEmbedDust3R):
     def __init__(self, img_size=224, patch_size=16, in_chans=3, embed_dim=768, norm_layer=None, flatten=True):
         super().__init__(img_size, patch_size, in_chans, embed_dim, norm_layer, flatten)
 

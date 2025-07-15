@@ -8,13 +8,15 @@ import torch
 import torch.nn.functional as F
 import os
 
-from mast3r.catmlp_dpt_head import mast3r_head_factory
+from torch import nn
+
+from .catmlp_dpt_head import mast3r_head_factory
 
 import mast3r.utils.path_to_dust3r  # noqa
 from dust3r.model import AsymmetricCroCo3DStereo  # noqa
 from dust3r.utils.misc import transpose_to_landscape  # noqa
-from dust3r.patch_embed import get_patch_embed as dust3r_patch_embed # 我们有了自己的patch_embed用于处理深度图mlp，这里要换个名字
-from patch_embed import get_patch_embed # pow3r设计的
+from ..dust3r.dust3r.patch_embed import get_patch_embed as dust3r_patch_embed # 我们有了自己的patch_embed用于处理深度图mlp，这里要换个名字
+from .patch_embed import get_patch_embed # pow3r设计的
 
 
 inf = float('inf')
@@ -42,6 +44,7 @@ def load_model(model_path, device, verbose=True):
 class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
     def __init__(self, desc_mode=('norm'), two_confs=False, desc_conf_mode=None, use_offsets=False, sh_degree=1,
                  patch_embed_cls='PatchEmbedDust3R', **kwargs): # 嗯，这里也需要cls名称了。
+
         self.desc_mode = desc_mode
         self.two_confs = two_confs
         self.desc_conf_mode = desc_conf_mode
@@ -49,11 +52,15 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         self.sh_degree = sh_degree
         self.max_depth = 100
         self.patch_embed_cls = patch_embed_cls
-        self.patch_embed = dust3r_patch_embed(patch_embed_cls, img_size, patch_size, self.enc_embed_dim)
-        # 这个get_patch_embed是pow3r实现的，一个用于深度图的方法。
-        self.patch_embed_depth = get_patch_embed(patch_embed_cls + '_Mlp', img_size, patch_size, self.enc_embed_dim,
-                                                 in_chans=2)
+
         super().__init__(**kwargs)
+        self.patch_ln = nn.Identity()
+
+    def _set_patch_embed(self, img_size=224, patch_size=16, enc_embed_dim=768):
+        self.patch_embed = dust3r_patch_embed(self.patch_embed_cls, img_size, patch_size, enc_embed_dim)
+        # 这个get_patch_embed是pow3r实现的，一个用于深度图的方法。
+        self.patch_embed_depth = get_patch_embed(self.patch_embed_cls + '_Mlp', img_size, patch_size, enc_embed_dim,
+                                                 in_chans=2)
 
     # def _encode_symmetrized(self, view1):
     #     """重写编码方法：使用单视图的RGB和深度图作为双输入""" 这里已经暂时被废弃了。现在用的是pow3r方法
@@ -106,12 +113,12 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
 
         # now apply the transformer encoder and normalization
         for blk in self.enc_blocks:
-            x = blk(x, pos, depth=depth_emb)  # 这里可能有问题，完全没找到这个depth参数的来源。
+            x = blk(x, pos)  # 这里可能有问题，完全没找到这个depth参数的来源。
 
         x = self.enc_norm(x)
-        return x, pos
+        return x, pos, None
 
-    def encode_symmetrized(self, view1, view2):
+    def _encode_symmetrized(self, view1, view2):
         img1 = view1['img']
         img2 = view2['img']
         B = img1.shape[0]
@@ -125,6 +132,7 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         # rays2 = view2.get('known_rays', None)
         depth1 = view1.get('depthmap', None)
         depth2 = view2.get('depthmap', None)
+        print("depth形状",depth1.shape)
 
         # if is_symmetrized(view1, view2):
         #     # computing half of forward pass!'

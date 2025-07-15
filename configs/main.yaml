@@ -26,7 +26,7 @@ data:
 
 # Optimization
 opt:
-  epochs: 500
+  epochs: 150
   lr: 0.00001
   weight_decay: 0.05
   gradient_clip_val: 0.5

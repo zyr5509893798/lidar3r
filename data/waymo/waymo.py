@@ -192,8 +192,8 @@ class WaymoData:
         if sequence not in self.color_paths:
             raise ValueError(f"无效场景: {sequence}")
 
-        if view_idx >= len(self.color_paths[sequence]):
-            raise ValueError(f"无效视图索引: {view_idx} (最大 {len(self.color_paths[sequence]) - 1})")
+        if frame_idx >= len(self.color_paths[sequence]):
+            raise ValueError(f"无效视图索引: {frame_idx} (最大 {len(self.color_paths[sequence]) - 1})")
 
         # 将一维索引转换为二维索引
         # frame_idx = view_idx // 5
@@ -235,7 +235,8 @@ class WaymoData:
             'camera_intrinsics': intrinsics,
             'dataset': 'waymo',
             'label': f"waymo/{sequence}",
-            'instance': f'{view_idx}',
+            'instance': f'{frame_idx}',
+            'camera_id': f"{cam_idx}",
             'is_metric_scale': True,
             'sky_mask': sky_mask,  # 新增天空掩码
             'valid_mask': valid_mask  # 新增有效深度掩码
@@ -294,7 +295,7 @@ def get_waymo_dataset(root, stage, resolution, num_epochs_per_epoch=1):
     for sequence in data.sequences:
         with open(f'/home/robot/zyr/waymo/coverage/{sequence}.json', 'r') as f:
             sequence_coverage = json.load(f)
-
+        coverage[sequence] = {}
         # 提取所有5个相机的矩阵 (ID 0 到 4)
         for camera_id in range(5):  # 生成 0,1,2,3,4
             # JSON键是字符串类型
