@@ -4,6 +4,7 @@
 # --------------------------------------------------------
 # MASt3R model class
 # --------------------------------------------------------
+import numpy as np
 import torch
 import torch.nn.functional as F
 import os
@@ -116,7 +117,7 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
             x = blk(x, pos)  # 这里可能有问题，完全没找到这个depth参数的来源。
 
         x = self.enc_norm(x)
-        return x, pos, None
+        return x, pos
 
     def _encode_symmetrized(self, view1, view2):
         img1 = view1['img']
@@ -132,7 +133,13 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         # rays2 = view2.get('known_rays', None)
         depth1 = view1.get('depthmap', None)
         depth2 = view2.get('depthmap', None)
-        print("depth形状",depth1.shape)
+        mask1 = view1.get('valid_mask', None)
+        mask2 = view2.get('valid_mask', None)
+
+        # 在这里进行深度图维度堆叠
+        depth1_two_channel = torch.stack([depth1, mask1], dim=1) # 直接堆叠为 [2, H, W]
+        depth2_two_channel = torch.stack([depth2, mask2], dim=1)  # 直接堆叠为 [2, H, W]
+        # print("depth形状",depth1_two_channel.shape)
 
         # if is_symmetrized(view1, view2):
         #     # computing half of forward pass!'
@@ -146,8 +153,8 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         #     pos1, pos2 = interleave(pos1, pos2)
         # else: 对于对称样本的冗余处理，暂时没条件实现。直接走else吧.
 
-        feat1, pos1 = self._encode_image(img1, shape1, depth=depth1)
-        feat2, pos2 = self._encode_image(img2, shape2, depth=depth2)
+        feat1, pos1 = self._encode_image(img1, shape1, depth=depth1_two_channel)
+        feat2, pos2 = self._encode_image(img2, shape2, depth=depth2_two_channel)
 
         return (shape1, shape2), (feat1, feat2), (pos1, pos2)
 

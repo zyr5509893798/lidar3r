@@ -220,12 +220,12 @@ class WaymoData:
         # 标准化深度图
         normalized_depth = normalize_depth_map(depth_map)  # (H, W)
 
-        # 创建两通道深度图 [2, H, W]
-        depth_two_channel = np.stack([normalized_depth, valid_mask], axis=0)  # 直接堆叠为 [2, H, W]
+        # 创建两通道深度图 [2, H, W],这里调整到model内部进行堆叠，因为loss_mask要使用一维深度图。必须是{H W]
+        # depth_two_channel = np.stack([normalized_depth, valid_mask], axis=0)  # 直接堆叠为 [2, H, W]
 
         return {
             'original_img': rgb_image,
-            'depthmap': depth_two_channel,  # 形状 [2, H, W]
+            'depthmap': normalized_depth,  # 形状 [H, W]
             'camera_pose': c2w,
             'camera_intrinsics': intrinsics,
             'dataset': 'waymo',
