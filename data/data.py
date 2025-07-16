@@ -50,7 +50,7 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
         self.data = data
 
         self.num_context_views = 2
-        self.num_target_views = 3
+        self.num_target_views = 1
         # self.coverage = coverage
         self.resolution = resolution
         self.transform = ImgNorm
