@@ -54,11 +54,12 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         self.max_depth = 100
         self.patch_embed_cls = patch_embed_cls
 
-        # 添加将4通道(RGB+深度)转换为3通道的卷积层
-        self.depth_fusion_conv = nn.Conv2d(4, 3, kernel_size=1, stride=1, padding=0)
 
         super().__init__(**kwargs)
         self.patch_ln = nn.Identity()
+
+        # 添加将4通道(RGB+深度)转换为3通道的卷积层
+        self.depth_fusion_conv = nn.Conv2d(4, 3, kernel_size=1, stride=1, padding=0)
 
     def _set_patch_embed(self, img_size=224, patch_size=16, enc_embed_dim=768):
         self.patch_embed = dust3r_patch_embed(self.patch_embed_cls, img_size, patch_size, enc_embed_dim)

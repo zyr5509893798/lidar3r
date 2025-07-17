@@ -287,28 +287,28 @@ def get_waymo_dataset(root, stage, resolution, num_epochs_per_epoch=1):
 
     data = WaymoData(root, stage)
 
-    # coverage = {}
-    # for sequence in data.sequences:
-    #     with open(f'/home/robot/zyr/waymo/coverage/{sequence}.json', 'r') as f:
-    #         sequence_coverage = json.load(f)
-    #     coverage[sequence] = {}
-    #     # 提取所有5个相机的矩阵 (ID 0 到 4)
-    #     for camera_id in range(5):  # 生成 0,1,2,3,4
-    #         # JSON键是字符串类型
-    #         camera_key = str(camera_id)
-    #
-    #         # 检查相机是否存在
-    #         if camera_key in sequence_coverage['cameras']:
-    #             # 提取并存储覆盖矩阵
-    #             coverage[sequence][camera_id] = sequence_coverage['cameras'][camera_key]['coverage_matrix']
-    #         else:
-    #             print(f"警告: 场景{sequence} 相机 {camera_id} 矩阵未在数据中找到")
-    #
-    #     print(f"场景{sequence}矩阵读取完毕")
+    coverage = {}
+    for sequence in data.sequences:
+        with open(f'/home/robot/zyr/waymo/coverage/{sequence}.json', 'r') as f:
+            sequence_coverage = json.load(f)
+        coverage[sequence] = {}
+        # 提取所有5个相机的矩阵 (ID 0 到 4)
+        for camera_id in range(5):  # 生成 0,1,2,3,4
+            # JSON键是字符串类型
+            camera_key = str(camera_id)
+
+            # 检查相机是否存在
+            if camera_key in sequence_coverage['cameras']:
+                # 提取并存储覆盖矩阵
+                coverage[sequence][camera_id] = sequence_coverage['cameras'][camera_key]['coverage_matrix']
+            else:
+                print(f"警告: 场景{sequence} 相机 {camera_id} 矩阵未在数据中找到")
+
+        print(f"场景{sequence}矩阵读取完毕")
 
     dataset = DUST3RSplattingDataset(
         data,
-        # coverage,
+        coverage,
         resolution,
         num_epochs_per_epoch=num_epochs_per_epoch,
     )

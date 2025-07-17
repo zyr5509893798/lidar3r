@@ -44,7 +44,7 @@ def crop_resize_if_necessary(image, depthmap, intrinsics, resolution):
 
 class DUST3RSplattingDataset(torch.utils.data.Dataset):
 
-    def __init__(self, data, coverage, resolution, num_epochs_per_epoch=1, alpha=0.3, beta=0.3):
+    def __init__(self, data, coverage, resolution, num_epochs_per_epoch=1, alpha=0.85, beta=0.85):
 
         super(DUST3RSplattingDataset, self).__init__()
         self.data = data
@@ -139,7 +139,8 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
 
         # 注意这里改了之后，view的id选择只是选择了随机一帧，另外要选择随机一个相机视角
         first_context_view = random.randint(0, len(self.data.color_paths[sequence]) - 1) # 随便选图1
-        camera_id = random.randint(0, 4) # 随机选相机视角
+        # camera_id = random.randint(0, 2) # 随机选相机视角
+        camera_id = 0
 
         # Pick a second context view that has sufficient overlap with the first context view
         valid_second_context_views = []
