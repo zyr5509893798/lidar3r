@@ -24,24 +24,21 @@ inf = float('inf')
 
 
 class DepthFusionModule(nn.Module):
-    def __init__(self, in_channels=4, out_channels=3):
+    def __init__(self, in_channels, out_channels=3):
         super().__init__()
+        # 使用动态输入通道数
         self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
         self.conv3 = nn.Conv2d(64, out_channels, kernel_size=3, padding=1)
         self.relu = nn.ReLU()
+        # 残差路径也使用动态通道数
         self.residual = nn.Conv2d(in_channels, out_channels, kernel_size=1)
 
     def forward(self, x):
-        # 主路径：三层卷积+非线性
         main = self.relu(self.conv1(x))
         main = self.relu(self.conv2(main))
         main = self.conv3(main)
-
-        # 残差路径：1x1卷积
         residual = self.residual(x)
-
-        # 融合并激活
         return self.relu(main + residual)
 
 def load_model(model_path, device, verbose=True):
@@ -79,15 +76,23 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         super().__init__(**kwargs)
         self.patch_ln = nn.Identity()
 
-        # 更强大的深度融合模块
-        self.depth_fusion = DepthFusionModule(in_channels=4, out_channels=3)
-
-        # 可选的深度特征增强
+        # 深度特征增强
         self.depth_encoder = nn.Sequential(
             nn.Conv2d(2, 16, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.Conv2d(16, 32, kernel_size=3, padding=1),
             nn.ReLU()
+        )
+
+        # 动态计算融合模块的输入通道数
+        rgb_channels = 3  # RGB图像的通道数
+        depth_feat_channels = 32  # depth_encoder的输出通道数
+        fusion_in_channels = rgb_channels + depth_feat_channels
+
+        # 更强大的深度融合模块（使用动态输入通道）
+        self.depth_fusion = DepthFusionModule(
+            in_channels=fusion_in_channels,
+            out_channels=3
         )
 
     def _set_patch_embed(self, img_size=224, patch_size=16, enc_embed_dim=768):
@@ -136,7 +141,7 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
             # 应用掩码
             depth_map = depth_map * mask
 
-            # 可选：深度特征增强
+            # 深度特征增强
             depth_feat = self.depth_encoder(depth)
 
             # 拼接RGB和增强后的深度特征

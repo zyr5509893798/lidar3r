@@ -58,7 +58,14 @@ class MAST3RGaussians(L.LightningModule):
             use_offsets=config.use_offsets,
             sh_degree=config.sh_degree if hasattr(config, 'sh_degree') else 1
         )
+        # 冻结整个编码器
         self.encoder.requires_grad_(False)
+
+        # 解冻新增的深度融合模块
+        self.encoder.depth_fusion.requires_grad_(True)
+        self.encoder.depth_encoder.requires_grad_(True)
+
+        # 解冻原始模型中需要训练的部分
         self.encoder.downstream_head1.gaussian_dpt.dpt.requires_grad_(True)
         self.encoder.downstream_head2.gaussian_dpt.dpt.requires_grad_(True)
 
@@ -86,8 +93,10 @@ class MAST3RGaussians(L.LightningModule):
     def forward(self, view1, view2):
 
         # Freeze the encoder and decoder
+        (shape1, shape2), (feat1, feat2), (pos1, pos2) = self.encoder._encode_symmetrized(view1, view2)
+
         with torch.no_grad():
-            (shape1, shape2), (feat1, feat2), (pos1, pos2) = self.encoder._encode_symmetrized(view1, view2)
+            # (shape1, shape2), (feat1, feat2), (pos1, pos2) = self.encoder._encode_symmetrized(view1, view2)
             dec1, dec2 = self.encoder._decoder(feat1, pos1, feat2, pos2)
 
         # Train the downstream heads
@@ -143,6 +152,22 @@ class MAST3RGaussians(L.LightningModule):
         self.log_metrics('train', loss, mse, lpips)
         return loss
 
+    def on_train_batch_start(self, batch, batch_idx):
+        # 记录各参数组学习率
+        for i, pg in enumerate(self.optimizers().param_groups):
+            self.log(f"lr/group_{i}", pg['lr'], prog_bar=(i == 0))
+
+        # 监控新增模块梯度
+        for name, param in self.encoder.depth_fusion.named_parameters():
+            if param.grad is not None:
+                self.log(f"grad_norm/fusion/{name}", param.grad.norm())
+
+    def on_train_epoch_end(self):
+        # 检查新增模块权重变化
+        for name, param in self.encoder.depth_fusion.named_parameters():
+            self.log(f"weight_mean/fusion/{name}", param.data.mean())
+            self.log(f"weight_std/fusion/{name}", param.data.std())
+
     def validation_step(self, batch, batch_idx):
 
         _, _, h, w = batch["context"][0]["img"].shape
@@ -196,7 +221,8 @@ class MAST3RGaussians(L.LightningModule):
         # if apply_mask:
         #     assert mask.sum() > 0, "There are no valid pixels in the mask!"
         #     target_color = target_color * mask[..., None, :, :]
-        #     predicted_color = predicted_color * mask[..., None, :, :]
+        #     predicted_colo
+        #     r = predicted_color * mask[..., None, :, :]
 
         flattened_color = einops.rearrange(predicted_color, 'b v c h w -> (b v) c h w')
         flattened_target_color = einops.rearrange(target_color, 'b v c h w -> (b v) c h w')
@@ -253,15 +279,63 @@ class MAST3RGaussians(L.LightningModule):
         sync_dist = prefix != 'train'
         self.log_dict(values, prog_bar=prog_bar, sync_dist=sync_dist, batch_size=self.config.data.batch_size)
 
+    # def configure_optimizers(self):
+    #     optimizer = torch.optim.Adam(self.encoder.parameters(), lr=self.config.opt.lr)
+    #     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [self.config.opt.epochs // 2], gamma=0.1)
+    #     return {
+    #         "optimizer": optimizer,
+    #         "lr_scheduler": {
+    #             "scheduler": scheduler,
+    #             "interval": "epoch",
+    #             "frequency": 1,
+    #         },
+    #     }
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.encoder.parameters(), lr=self.config.opt.lr)
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [self.config.opt.epochs // 2], gamma=0.1)
+        # 参数组配置
+        param_groups = [
+            # 新增融合模块 - 使用更高学习率
+            {
+                'params': list(self.encoder.depth_fusion.parameters()) +
+                          list(self.encoder.depth_encoder.parameters()),
+                'lr': self.config.opt.lr * 30,  # 提高至3e-4
+                'weight_decay': self.config.opt.weight_decay * 0.5  # 降低权重衰减
+            },
+            # 下游头部 - 中等学习率
+            {
+                'params': list(self.encoder.downstream_head1.parameters()) +
+                          list(self.encoder.downstream_head2.parameters()),
+                'lr': self.config.opt.lr * 5,  # 5e-5
+                'weight_decay': self.config.opt.weight_decay
+            }
+        ]
+
+        optimizer = torch.optim.AdamW(
+            param_groups,
+            lr=self.config.opt.lr,  # 基础lr (1e-5) 作为后备
+            weight_decay=self.config.opt.weight_decay,
+            eps=1e-8
+        )
+
+        # 使用带热启动的余弦退火调度
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=[pg['lr'] for pg in param_groups],  # 各组的最大学习率
+            total_steps=self.trainer.estimated_stepping_batches,
+            epochs=self.config.opt.epochs,
+            pct_start=0.2,  # 20%训练时间用于热启动
+            anneal_strategy='cos',
+            cycle_momentum=True,
+            base_momentum=0.85,
+            max_momentum=0.95,
+            div_factor=25.0,  # 初始学习率 = max_lr/div_factor
+            final_div_factor=1e4  # 最终学习率 = max_lr/final_div_factor
+        )
+
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "interval": "epoch",
-                "frequency": 1,
+                "interval": "step",
             },
         }
 
