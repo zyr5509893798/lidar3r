@@ -22,94 +22,6 @@ from .patch_embed import get_patch_embed # pow3r设计的
 
 inf = float('inf')
 
-
-class DepthFusionModule(nn.Module):
-    def __init__(self, in_channels=4, out_channels=3):
-        super().__init__()
-        # 更深的残差结构
-        self.conv_block1 = nn.Sequential(
-            nn.Conv2d(in_channels, 64, 3, padding=1),
-            nn.GroupNorm(8, 64),  # 使用GroupNorm替代BatchNorm
-            nn.GELU(),
-            nn.Conv2d(64, 64, 3, padding=1),
-            nn.GroupNorm(8, 64),
-            nn.GELU()
-        )
-
-        self.conv_block2 = nn.Sequential(
-            nn.Conv2d(64, 128, 3, padding=1, stride=2),  # 下采样
-            nn.GroupNorm(16, 128),
-            nn.GELU(),
-            nn.Conv2d(128, 128, 3, padding=1),
-            nn.GroupNorm(16, 128),
-            nn.GELU()
-        )
-
-        self.conv_block3 = nn.Sequential(
-            nn.Conv2d(128, 256, 3, padding=1, stride=2),  # 下采样
-            nn.GroupNorm(32, 256),
-            nn.GELU(),
-            nn.Conv2d(256, 256, 3, padding=1),
-            nn.GroupNorm(32, 256),
-            nn.GELU()
-        )
-
-        # 上采样路径
-        self.up_block2 = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
-            nn.Conv2d(256, 128, 3, padding=1),
-            nn.GroupNorm(16, 128),
-            nn.GELU()
-        )
-
-        self.up_block1 = nn.Sequential(
-            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
-            nn.Conv2d(128, 64, 3, padding=1),
-            nn.GroupNorm(8, 64),
-            nn.GELU()
-        )
-
-        self.final_conv = nn.Conv2d(64, out_channels, 1)
-
-        # 残差路径
-        self.residual = nn.Sequential(
-            nn.Conv2d(in_channels, 64, 1),
-            nn.GroupNorm(8, 64),
-            nn.GELU(),
-            nn.Conv2d(64, out_channels, 1)
-        )
-
-        # 初始化
-        self._init_weights()
-
-    def _init_weights(self):
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-
-    def forward(self, x):
-        # 主路径
-        identity = x
-
-        # 下采样路径
-        x1 = self.conv_block1(x)
-        x2 = self.conv_block2(x1)
-        x3 = self.conv_block3(x2)
-
-        # 上采样路径
-        x = self.up_block2(x3) + x2  # 跳跃连接
-        x = self.up_block1(x) + x1  # 跳跃连接
-
-        # 最终输出
-        main = self.final_conv(x)
-
-        # 残差路径
-        residual = self.residual(identity)
-
-        return nn.functional.gelu(main + residual)
-
 def load_model(model_path, device, verbose=True):
     if verbose:
         print('... loading model from', model_path)
@@ -128,6 +40,59 @@ def load_model(model_path, device, verbose=True):
         print(s)
     return net.to(device)
 
+# 深度编码器，用到了一点稀疏CNN？
+class SparseDepthEncoder(nn.Module):
+    """增强的稀疏深度编码器，显式处理掩码"""
+
+    def __init__(self, in_channels=2, out_channels=32):
+        super().__init__()
+        # 显式处理稀疏性的编码器
+        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
+        self.conv3 = nn.Conv2d(64, out_channels, kernel_size=3, padding=1)
+        self.mask_pool = nn.MaxPool2d(3, stride=1, padding=1)  # 掩码下采样
+
+    def forward(self, x):
+        # 分离深度和掩码 [B,2,H,W]
+        depth_map, mask = x.chunk(2, dim=1)
+
+        # 初始处理 (保留掩码信息)
+        x = torch.cat([depth_map * mask, mask], dim=1)  # [B,2,H,W]
+        x = F.relu(self.conv1(x))
+
+        # 下采样掩码并应用
+        mask = self.mask_pool(mask)
+        x = x * mask  # 掩码引导的特征选择
+
+        x = F.relu(self.conv2(x))
+        mask = self.mask_pool(mask)
+        x = x * mask
+
+        return self.conv3(x)  # [B, out_channels, H, W]
+
+# gpt建议的后融合策略，避免前融合导致特征提取失败
+class FeatureFusionGate(nn.Module):
+    """门控特征融合模块"""
+
+    def __init__(self, rgb_channels, depth_channels):
+        super().__init__()
+        # 通道对齐
+        self.depth_proj = nn.Conv2d(depth_channels, rgb_channels, 1)
+        # 门控机制
+        self.gate = nn.Sequential(
+            nn.Conv2d(rgb_channels * 2, rgb_channels, 3, padding=1),
+            nn.Sigmoid()  # 生成0-1融合权重
+        )
+
+    def forward(self, rgb_feat, depth_feat):
+        # 对齐深度特征维度
+        depth_feat = self.depth_proj(depth_feat)
+
+        # 生成门控权重
+        gate = self.gate(torch.cat([rgb_feat, depth_feat], dim=1))
+
+        # 门控融合
+        return rgb_feat * gate + depth_feat * (1 - gate)
 
 class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
     def __init__(self, desc_mode=('norm'), two_confs=False, desc_conf_mode=None, use_offsets=False, sh_degree=1,
@@ -145,42 +110,46 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         super().__init__(**kwargs)
         self.patch_ln = nn.Identity()
 
-        # # 深度特征增强
-        # self.depth_encoder = nn.Sequential(
-        #     nn.Conv2d(2, 16, kernel_size=3, padding=1),
-        #     nn.ReLU(),
-        #     nn.Conv2d(16, 32, kernel_size=3, padding=1),
-        #     nn.ReLU()
-        # )
-        # RGB投影层
-        self.rgb_projection = nn.Conv2d(3, 32, kernel_size=1)
+        # 我们增加的内容
+        # 稀疏深度编码器 (输出32通道)
+        self.depth_encoder = SparseDepthEncoder(in_channels=2, out_channels=32)
 
-        # 深度编码器简化
-        self.depth_encoder = nn.Sequential(
-            nn.Conv2d(2, 32, kernel_size=3, padding=1),
-            nn.GroupNorm(8, 32),
-            nn.GELU(),
-            nn.Conv2d(32, 32, kernel_size=3, padding=1),
-            nn.GroupNorm(8, 32),
-            nn.GELU()
-        )
+    def _reshape_to_2d(self, tokens, true_shape):
+        """将ViT输出token序列转换为2D特征图"""
+        B, N, C = tokens.shape
 
-        # 动态计算融合模块的输入通道数
-        rgb_channels = 32  # RGB图像的通道数
-        depth_feat_channels = 32  # depth_encoder的输出通道数
-        fusion_in_channels = rgb_channels + depth_feat_channels
+        # 计算特征图尺寸 (考虑非方形patch)
+        H = true_shape[:, 0] // self.patch_size
+        W = true_shape[:, 1] // self.patch_size
 
-        # 更强大的深度融合模块（使用动态输入通道）
-        self.depth_fusion = DepthFusionModule(
-            in_channels=fusion_in_channels,
-            out_channels=3
-        )
+        # 重塑为2D特征图 [B, C, H, W]
+        feat_maps = []
+        for i in range(B):
+            h, w = H[i].item(), W[i].item()
+            feat = tokens[i].view(h, w, C).permute(2, 0, 1)  # [C, H, W]
+            feat_maps.append(feat)
+
+        return torch.stack(feat_maps)  # [B, C, H, W]
 
     def _set_patch_embed(self, img_size=224, patch_size=16, enc_embed_dim=768):
         self.patch_embed = dust3r_patch_embed(self.patch_embed_cls, img_size, patch_size, enc_embed_dim)
         # 这个get_patch_embed是pow3r实现的，一个用于深度图的方法。
         # self.patch_embed_depth = get_patch_embed(self.patch_embed_cls + '_Mlp', img_size, patch_size, enc_embed_dim,
         #                                          in_chans=2)
+        # 保存关键尺寸信息
+        self.patch_size = patch_size
+        self.img_size = img_size
+
+        # 计算特征图尺寸 (ViT输出维度)
+        self.feat_height = img_size[0] // patch_size
+        self.feat_width = img_size[1] // patch_size
+        self.feat_channels = self.enc_norm.normalized_shape[0]  # 从LayerNorm获取通道数
+
+        # 特征融合门 (RGB特征通道来自ViT，深度特征32通道)
+        self.fusion_gate = FeatureFusionGate(
+            rgb_channels=self.feat_channels,
+            depth_channels=32
+        )
 
     # def _encode_symmetrized(self, view1):
     #     """重写编码方法：使用单视图的RGB和深度图作为双输入""" 这里已经暂时被废弃了。现在用的是pow3r方法
@@ -232,87 +201,68 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         #     fused_image = self.depth_fusion(image_with_depth)
         # else:
         #     fused_image = image
-        """重构的图像编码流程"""
-        if depth is not None:
-            # 分离深度和掩码
-            depth_map = depth[:, 0:1]  # [B,1,H,W]
-            mask = depth[:, 1:2]  # [B,1,H,W]
+        x, pos = self.patch_embed(image, true_shape=true_shape)
 
-            # 深度图归一化 (关键步骤!)
-            depth_map = depth_map / self.max_depth
-
-            # 应用掩码
-            depth_map = depth_map * mask
-
-            # 深度特征提取
-            depth_feat = self.depth_encoder(torch.cat([depth_map, mask], dim=1))
-
-            # 与RGB图像拼接
-            # 注意: 使用1x1卷积对齐通道数
-            rgb_proj = self.rgb_projection(image)
-            combined = torch.cat([rgb_proj, depth_feat], dim=1)
-
-            # 通过深度融合模块
-            fused_image = self.depth_fusion(combined)
-        else:
-            fused_image = image
-
-        # 使用融合后的图像进行嵌入
-        x, pos = self.patch_embed(fused_image, true_shape=true_shape)
-        x = self.patch_ln(x)
-
-        # 添加位置嵌入（无cls token）
+        # add positional embedding without cls token
         assert self.enc_pos_embed is None
 
         # now apply the transformer encoder and normalization
         for blk in self.enc_blocks:
-            x = blk(x, pos)  # 这里可能有问题，完全没找到这个depth参数的来源。
+            x = blk(x, pos)
 
-        x = self.enc_norm(x)
-        return x, pos
+        tokens = self.enc_norm(x)  # [B, N, C]
+
+        # 深度处理
+        depth_feat = None
+        if depth is not None:
+            depth_feat = self.depth_encoder(depth)  # [B, 32, H, W]
+
+        # 返回token序列和深度特征
+        return tokens, pos, depth_feat
 
     def _encode_symmetrized(self, view1, view2):
         img1 = view1['img']
         img2 = view2['img']
         B = img1.shape[0]
-        # Recover true_shape when available, otherwise assume that the img shape is the true one
         shape1 = view1.get('true_shape', torch.tensor(img1.shape[-2:])[None].repeat(B, 1))
         shape2 = view2.get('true_shape', torch.tensor(img2.shape[-2:])[None].repeat(B, 1))
-        # warning! maybe the images have different portrait/landscape orientations
 
-        # privileged information
-        # rays1 = view1.get('known_rays', None)
-        # rays2 = view2.get('known_rays', None)
+        # 准备深度输入
         depth1 = view1.get('depthmap', None)
-        depth2 = view2.get('depthmap', None)
         mask1 = view1.get('valid_mask', None)
-        mask2 = view2.get('valid_mask', None)
-
-        # 准备深度输入：将深度图和掩码堆叠为2通道张量
         depth1_input = torch.stack([depth1, mask1], dim=1) if depth1 is not None else None
+
+        depth2 = view2.get('depthmap', None)
+        mask2 = view2.get('valid_mask', None)
         depth2_input = torch.stack([depth2, mask2], dim=1) if depth2 is not None else None
 
-        # 使用修改后的_encode_image方法
-        feat1, pos1 = self._encode_image(img1, shape1, depth=depth1_input)
-        feat2, pos2 = self._encode_image(img2, shape2, depth=depth2_input)
-        # print("depth形状",depth1_two_channel.shape)
+        # 编码图像
+        tokens1, pos1, depth_feat1 = self._encode_image(img1, shape1, depth=depth1_input)
+        tokens2, pos2, depth_feat2 = self._encode_image(img2, shape2, depth=depth2_input)
 
-        # if is_symmetrized(view1, view2):
-        #     # computing half of forward pass!'
-        #     def hsub(x):
-        #         return None if x is None else x[::2]
-        #
-        #     feat1, pos1 = self._encode_image(img1[::2], shape1[::2], rays=hsub(rays1), depth=hsub(depth1))
-        #     feat2, pos2 = self._encode_image(img2[::2], shape2[::2], rays=hsub(rays2), depth=hsub(depth2))
-        #
-        #     feat1, feat2 = interleave(feat1, feat2)
-        #     pos1, pos2 = interleave(pos1, pos2)
-        # else: 对于对称样本的冗余处理，暂时没条件实现。直接走else吧.
+        return (shape1, shape2), (tokens1, tokens2), (pos1, pos2), (depth_feat1, depth_feat2)
 
-        # feat1, pos1 = self._encode_image(img1, shape1, depth=depth1_two_channel)
-        # feat2, pos2 = self._encode_image(img2, shape2, depth=depth2_two_channel)
+    def _fuse_features(self, tokens, true_shape, depth_feat):
+        """融合ViT特征和深度特征"""
+        # 转换token为2D特征图
+        rgb_feat = self._reshape_to_2d(tokens, true_shape)  # [B, C, H, W]
 
-        return (shape1, shape2), (feat1, feat2), (pos1, pos2)
+        if depth_feat is not None:
+            # 调整深度特征分辨率 (与ViT特征图匹配)
+            depth_feat = F.interpolate(
+                depth_feat,
+                size=(rgb_feat.shape[2], rgb_feat.shape[3]),
+                mode='bilinear',
+                align_corners=False
+            )
+            # 门控融合
+            fused_feat = self.fusion_gate(rgb_feat, depth_feat)
+        else:
+            fused_feat = rgb_feat
+
+        # 重新展平为token序列 [B, N, C]
+        B, C, H, W = fused_feat.shape
+        return fused_feat.view(B, C, -1).permute(0, 2, 1)  # [B, N, C]
 
     @classmethod
     def from_pretrained(cls, pretrained_model_name_or_path, **kw):
@@ -337,10 +287,10 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         self.head1 = transpose_to_landscape(self.downstream_head1, activate=landscape_only)
         self.head2 = transpose_to_landscape(self.downstream_head2, activate=landscape_only)
 
-    def forward(self, view1):
+    def forward(self, view1, view2):
         """处理单视图输入（包含RGB和深度图）"""
         # 编码单视图的RGB和深度图
-        (shape1, shape2), (feat1, feat2), (pos1, pos2) = self._encode_symmetrized(view1)
+        (shape1, shape2), (feat1, feat2), (pos1, pos2) = self._encode_symmetrized(view1, view2)
 
         # 解码器处理双特征流
         dec1, dec2 = self._decoder(feat1, pos1, feat2, pos2)

@@ -62,7 +62,7 @@ class MAST3RGaussians(L.LightningModule):
         self.encoder.requires_grad_(False)
 
         # 解冻新增的深度融合模块
-        self.encoder.depth_fusion.requires_grad_(True)
+        self.encoder.fusion_gate.requires_grad_(True)
         self.encoder.depth_encoder.requires_grad_(True)
 
         # 解冻原始模型中需要训练的部分
@@ -92,12 +92,22 @@ class MAST3RGaussians(L.LightningModule):
 
     def forward(self, view1, view2):
 
-        # Freeze the encoder and decoder
-        (shape1, shape2), (feat1, feat2), (pos1, pos2) = self.encoder._encode_symmetrized(view1, view2)
+        # # Freeze the encoder and decoder
+        # (shape1, shape2), (feat1, feat2), (pos1, pos2) = self.encoder._encode_symmetrized(view1, view2)
+        #
+        # with torch.no_grad():
+        #     # (shape1, shape2), (feat1, feat2), (pos1, pos2) = self.encoder._encode_symmetrized(view1, view2)
+        #     dec1, dec2 = self.encoder._decoder(feat1, pos1, feat2, pos2)
+        # 编码
+        (shape1, shape2), (tokens1, tokens2), (pos1, pos2), (depth_feat1, depth_feat2) = self.encoder._encode_symmetrized(view1, view2)
+
+        # 特征融合
+        tokens1_fused = self.encoder._fuse_features(tokens1, shape1, depth_feat1)
+        tokens2_fused = self.encoder._fuse_features(tokens2, shape2, depth_feat2)
 
         with torch.no_grad():
-            # (shape1, shape2), (feat1, feat2), (pos1, pos2) = self.encoder._encode_symmetrized(view1, view2)
-            dec1, dec2 = self.encoder._decoder(feat1, pos1, feat2, pos2)
+            # 解码器处理融合特征
+            dec1, dec2 = self.encoder._decoder(tokens1_fused, pos1, tokens2_fused, pos2)
 
         # Train the downstream heads
         pred1 = self.encoder._downstream_head(1, [tok.float() for tok in dec1], shape1)
@@ -294,7 +304,7 @@ class MAST3RGaussians(L.LightningModule):
         # 更保守的分组学习率
         param_groups = [
             {
-                'params': list(self.encoder.depth_fusion.parameters()),
+                'params': list(self.encoder.fusion_gate.parameters()),
                 'lr': self.config.opt.lr * 30,  # 3e-4
                 'name': 'fusion'
             },
