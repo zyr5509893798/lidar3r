@@ -54,14 +54,17 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         self.max_depth = 100
         self.patch_embed_cls = patch_embed_cls
 
+        # 添加将4通道(RGB+深度)转换为3通道的卷积层
+        self.depth_fusion_conv = nn.Conv2d(4, 3, kernel_size=1, stride=1, padding=0)
+
         super().__init__(**kwargs)
         self.patch_ln = nn.Identity()
 
     def _set_patch_embed(self, img_size=224, patch_size=16, enc_embed_dim=768):
         self.patch_embed = dust3r_patch_embed(self.patch_embed_cls, img_size, patch_size, enc_embed_dim)
         # 这个get_patch_embed是pow3r实现的，一个用于深度图的方法。
-        self.patch_embed_depth = get_patch_embed(self.patch_embed_cls + '_Mlp', img_size, patch_size, enc_embed_dim,
-                                                 in_chans=2)
+        # self.patch_embed_depth = get_patch_embed(self.patch_embed_cls + '_Mlp', img_size, patch_size, enc_embed_dim,
+        #                                          in_chans=2)
 
     # def _encode_symmetrized(self, view1):
     #     """重写编码方法：使用单视图的RGB和深度图作为双输入""" 这里已经暂时被废弃了。现在用的是pow3r方法
@@ -94,22 +97,28 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
 
     # 从pow3r那里搞来的encoder图像处理，包括了深度。
     def _encode_image(self, image, true_shape, depth=None):
-        # embed the image into patches  (x has size B x Npatches x C)
-        x, pos = self.patch_embed(image, true_shape=true_shape)
+        """修改后的图像编码方法：将深度图作为额外通道与RGB拼接"""
+        if depth is not None:
+            # 深度图是2通道: [深度值, 掩码]
+            depth_map = depth[:, 0:1]  # 提取深度值通道 [B,1,H,W]
+            mask = depth[:, 1:2]  # 提取掩码通道 [B,1,H,W]
 
-        if depth is not None: # B,2,H,W ？为什么是2？
-            # 包含稀疏深度图和掩码（形状为(2, H, W)），第一维分别是归一化后的稀疏深度图和对应的掩码。
-            # 这里注意要修改深度图获取那里。pow3r的稀疏深度图是采样获取的，而不是由雷达得到。
-            depth_emb, pos2 = self.patch_embed_depth(depth, true_shape=true_shape)
-            assert (pos == pos2).all()
-            # if self.mode.startswith('embed'): 不知道在干啥，这里理论上没有别的
-            x = x + depth_emb # 这一步增加了深度信息，看上去没有形状上的改变
+            # 应用掩码：无效深度置0
+            depth_map = depth_map * mask
+
+            # 将深度图与原始RGB图像拼接 -> [B,4,H,W]
+            image_with_depth = torch.cat([image, depth_map], dim=1)
+
+            # 通过1x1卷积将4通道融合为3通道
+            fused_image = self.depth_fusion_conv(image_with_depth)
         else:
-            depth_emb = None
+            fused_image = image  # 无深度图时使用原始图像
 
+        # 使用融合后的图像进行嵌入
+        x, pos = self.patch_embed(fused_image, true_shape=true_shape)
         x = self.patch_ln(x)
 
-        # add positional embedding without cls token
+        # 添加位置嵌入（无cls token）
         assert self.enc_pos_embed is None
 
         # now apply the transformer encoder and normalization
@@ -136,9 +145,13 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         mask1 = view1.get('valid_mask', None)
         mask2 = view2.get('valid_mask', None)
 
-        # 在这里进行深度图维度堆叠
-        depth1_two_channel = torch.stack([depth1, mask1], dim=1) # 直接堆叠为 [2, H, W]
-        depth2_two_channel = torch.stack([depth2, mask2], dim=1)  # 直接堆叠为 [2, H, W]
+        # 准备深度输入：将深度图和掩码堆叠为2通道张量
+        depth1_input = torch.stack([depth1, mask1], dim=1) if depth1 is not None else None
+        depth2_input = torch.stack([depth2, mask2], dim=1) if depth2 is not None else None
+
+        # 使用修改后的_encode_image方法
+        feat1, pos1 = self._encode_image(img1, shape1, depth=depth1_input)
+        feat2, pos2 = self._encode_image(img2, shape2, depth=depth2_input)
         # print("depth形状",depth1_two_channel.shape)
 
         # if is_symmetrized(view1, view2):
@@ -153,8 +166,8 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         #     pos1, pos2 = interleave(pos1, pos2)
         # else: 对于对称样本的冗余处理，暂时没条件实现。直接走else吧.
 
-        feat1, pos1 = self._encode_image(img1, shape1, depth=depth1_two_channel)
-        feat2, pos2 = self._encode_image(img2, shape2, depth=depth2_two_channel)
+        # feat1, pos1 = self._encode_image(img1, shape1, depth=depth1_two_channel)
+        # feat2, pos2 = self._encode_image(img2, shape2, depth=depth2_two_channel)
 
         return (shape1, shape2), (feat1, feat2), (pos1, pos2)
 

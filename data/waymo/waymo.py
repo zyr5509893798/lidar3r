@@ -349,35 +349,3 @@ def reconstruct_depth_map(depth_data, original_shape):
     depth_map[mask] = values
     return depth_map
 
-# # 从压缩格式重建深度图 (从第二段代码移植)
-# def reconstruct_depth_map(depth_data, original_shape):
-#     """
-#     从压缩格式重建深度图
-#     :param depth_data: 从.npy文件加载的字典数据
-#     :param original_shape: 原始深度图形状 (H, W)
-#     :return: 重建后的深度图 (H, W)
-#     """
-#     depth_map = np.zeros(original_shape, dtype=np.float32)
-#     mask = depth_data['mask']
-#     values = depth_data['value']
-#     depth_map[mask] = values
-#     return depth_map
-#
-#
-# # 深度图标准化函数
-# def normalize_depth_map(depth_map, max_depth=100.0):
-#     """.astype(np.float32)
-#     标准化深度图：
-#     1. 截断到最大深度值
-#     2. 归一化到[0, 1]范围
-#     """
-#     # 截断深度值
-#     depth_map = np.clip(depth_map, 0, max_depth)
-#
-#     # 归一化到[0, 1]
-#     normalized = depth_map / max_depth
-#     return np.moveaxis(normalized, -1, 0)
-#     # # 转换为三通道伪RGB
-    # rgb = np.stack([normalized] * 3, axis=-1)  # 形状变为 [H, W, 3]
-    #
-    # return np.moveaxis(rgb, -1, 0) # 3 H W，我们最终需要的格式。
