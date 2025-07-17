@@ -24,22 +24,91 @@ inf = float('inf')
 
 
 class DepthFusionModule(nn.Module):
-    def __init__(self, in_channels, out_channels=3):
+    def __init__(self, in_channels=4, out_channels=3):
         super().__init__()
-        # 使用动态输入通道数
-        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=3, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, padding=1)
-        self.conv3 = nn.Conv2d(64, out_channels, kernel_size=3, padding=1)
-        self.relu = nn.ReLU()
-        # 残差路径也使用动态通道数
-        self.residual = nn.Conv2d(in_channels, out_channels, kernel_size=1)
+        # 更深的残差结构
+        self.conv_block1 = nn.Sequential(
+            nn.Conv2d(in_channels, 64, 3, padding=1),
+            nn.GroupNorm(8, 64),  # 使用GroupNorm替代BatchNorm
+            nn.GELU(),
+            nn.Conv2d(64, 64, 3, padding=1),
+            nn.GroupNorm(8, 64),
+            nn.GELU()
+        )
+
+        self.conv_block2 = nn.Sequential(
+            nn.Conv2d(64, 128, 3, padding=1, stride=2),  # 下采样
+            nn.GroupNorm(16, 128),
+            nn.GELU(),
+            nn.Conv2d(128, 128, 3, padding=1),
+            nn.GroupNorm(16, 128),
+            nn.GELU()
+        )
+
+        self.conv_block3 = nn.Sequential(
+            nn.Conv2d(128, 256, 3, padding=1, stride=2),  # 下采样
+            nn.GroupNorm(32, 256),
+            nn.GELU(),
+            nn.Conv2d(256, 256, 3, padding=1),
+            nn.GroupNorm(32, 256),
+            nn.GELU()
+        )
+
+        # 上采样路径
+        self.up_block2 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
+            nn.Conv2d(256, 128, 3, padding=1),
+            nn.GroupNorm(16, 128),
+            nn.GELU()
+        )
+
+        self.up_block1 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
+            nn.Conv2d(128, 64, 3, padding=1),
+            nn.GroupNorm(8, 64),
+            nn.GELU()
+        )
+
+        self.final_conv = nn.Conv2d(64, out_channels, 1)
+
+        # 残差路径
+        self.residual = nn.Sequential(
+            nn.Conv2d(in_channels, 64, 1),
+            nn.GroupNorm(8, 64),
+            nn.GELU(),
+            nn.Conv2d(64, out_channels, 1)
+        )
+
+        # 初始化
+        self._init_weights()
+
+    def _init_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
 
     def forward(self, x):
-        main = self.relu(self.conv1(x))
-        main = self.relu(self.conv2(main))
-        main = self.conv3(main)
-        residual = self.residual(x)
-        return self.relu(main + residual)
+        # 主路径
+        identity = x
+
+        # 下采样路径
+        x1 = self.conv_block1(x)
+        x2 = self.conv_block2(x1)
+        x3 = self.conv_block3(x2)
+
+        # 上采样路径
+        x = self.up_block2(x3) + x2  # 跳跃连接
+        x = self.up_block1(x) + x1  # 跳跃连接
+
+        # 最终输出
+        main = self.final_conv(x)
+
+        # 残差路径
+        residual = self.residual(identity)
+
+        return nn.functional.gelu(main + residual)
 
 def load_model(model_path, device, verbose=True):
     if verbose:
@@ -76,16 +145,28 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         super().__init__(**kwargs)
         self.patch_ln = nn.Identity()
 
-        # 深度特征增强
+        # # 深度特征增强
+        # self.depth_encoder = nn.Sequential(
+        #     nn.Conv2d(2, 16, kernel_size=3, padding=1),
+        #     nn.ReLU(),
+        #     nn.Conv2d(16, 32, kernel_size=3, padding=1),
+        #     nn.ReLU()
+        # )
+        # RGB投影层
+        self.rgb_projection = nn.Conv2d(3, 32, kernel_size=1)
+
+        # 深度编码器简化
         self.depth_encoder = nn.Sequential(
-            nn.Conv2d(2, 16, kernel_size=3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(16, 32, kernel_size=3, padding=1),
-            nn.ReLU()
+            nn.Conv2d(2, 32, kernel_size=3, padding=1),
+            nn.GroupNorm(8, 32),
+            nn.GELU(),
+            nn.Conv2d(32, 32, kernel_size=3, padding=1),
+            nn.GroupNorm(8, 32),
+            nn.GELU()
         )
 
         # 动态计算融合模块的输入通道数
-        rgb_channels = 3  # RGB图像的通道数
+        rgb_channels = 32  # RGB图像的通道数
         depth_feat_channels = 32  # depth_encoder的输出通道数
         fusion_in_channels = rgb_channels + depth_feat_channels
 
@@ -132,23 +213,47 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
 
     # 从pow3r那里搞来的encoder图像处理，包括了深度。
     def _encode_image(self, image, true_shape, depth=None):
-        """改进的图像编码方法：使用多阶段融合"""
+        # """改进的图像编码方法：使用多阶段融合"""
+        # if depth is not None:
+        #     # 分离深度和掩码
+        #     depth_map = depth[:, 0:1]  # [B,1,H,W]
+        #     mask = depth[:, 1:2]       # [B,1,H,W]
+        #
+        #     # 应用掩码
+        #     depth_map = depth_map * mask
+        #
+        #     # 深度特征增强
+        #     depth_feat = self.depth_encoder(depth)
+        #
+        #     # 拼接RGB和增强后的深度特征
+        #     image_with_depth = torch.cat([image, depth_feat], dim=1)
+        #
+        #     # 通过深度融合模块
+        #     fused_image = self.depth_fusion(image_with_depth)
+        # else:
+        #     fused_image = image
+        """重构的图像编码流程"""
         if depth is not None:
             # 分离深度和掩码
             depth_map = depth[:, 0:1]  # [B,1,H,W]
-            mask = depth[:, 1:2]       # [B,1,H,W]
+            mask = depth[:, 1:2]  # [B,1,H,W]
+
+            # 深度图归一化 (关键步骤!)
+            depth_map = depth_map / self.max_depth
 
             # 应用掩码
             depth_map = depth_map * mask
 
-            # 深度特征增强
-            depth_feat = self.depth_encoder(depth)
+            # 深度特征提取
+            depth_feat = self.depth_encoder(torch.cat([depth_map, mask], dim=1))
 
-            # 拼接RGB和增强后的深度特征
-            image_with_depth = torch.cat([image, depth_feat], dim=1)
+            # 与RGB图像拼接
+            # 注意: 使用1x1卷积对齐通道数
+            rgb_proj = self.rgb_projection(image)
+            combined = torch.cat([rgb_proj, depth_feat], dim=1)
 
             # 通过深度融合模块
-            fused_image = self.depth_fusion(image_with_depth)
+            fused_image = self.depth_fusion(combined)
         else:
             fused_image = image
 

@@ -291,44 +291,62 @@ class MAST3RGaussians(L.LightningModule):
     #         },
     #     }
     def configure_optimizers(self):
-        # 参数组配置
+        # 更保守的分组学习率
         param_groups = [
-            # 新增融合模块 - 使用更高学习率
             {
-                'params': list(self.encoder.depth_fusion.parameters()) +
-                          list(self.encoder.depth_encoder.parameters()),
-                'lr': self.config.opt.lr * 30,  # 提高至3e-4
-                'weight_decay': self.config.opt.weight_decay * 0.5  # 降低权重衰减
+                'params': list(self.encoder.depth_fusion.parameters()),
+                'lr': self.config.opt.lr * 30,  # 3e-4
+                'name': 'fusion'
             },
-            # 下游头部 - 中等学习率
+            {
+                'params': list(self.encoder.depth_encoder.parameters()),
+                'lr': self.config.opt.lr * 20,  # 2e-4
+                'name': 'depth_enc'
+            },
             {
                 'params': list(self.encoder.downstream_head1.parameters()) +
                           list(self.encoder.downstream_head2.parameters()),
-                'lr': self.config.opt.lr * 5,  # 5e-5
-                'weight_decay': self.config.opt.weight_decay
+                'lr': self.config.opt.lr * 3,  # 3e-5
+                'name': 'heads'
             }
         ]
 
         optimizer = torch.optim.AdamW(
             param_groups,
-            lr=self.config.opt.lr,  # 基础lr (1e-5) 作为后备
+            lr=self.config.opt.lr,
             weight_decay=self.config.opt.weight_decay,
-            eps=1e-8
+            betas=(0.9, 0.98),  # 更保守的beta2
+            eps=1e-6
         )
 
-        # 使用带热启动的余弦退火调度
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        # 使用阶梯式预热策略
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
             optimizer,
-            max_lr=[pg['lr'] for pg in param_groups],  # 各组的最大学习率
-            total_steps=self.trainer.estimated_stepping_batches,
-            epochs=self.config.opt.epochs,
-            pct_start=0.2,  # 20%训练时间用于热启动
-            anneal_strategy='cos',
-            cycle_momentum=True,
-            base_momentum=0.85,
-            max_momentum=0.95,
-            div_factor=25.0,  # 初始学习率 = max_lr/div_factor
-            final_div_factor=1e4  # 最终学习率 = max_lr/final_div_factor
+            schedulers=[
+                # 阶段1: 线性预热 (5%的训练步数)
+                torch.optim.lr_scheduler.LinearLR(
+                    optimizer,
+                    start_factor=0.01,
+                    end_factor=1.0,
+                    total_iters=int(0.05 * self.trainer.estimated_stepping_batches)
+                ),
+                # 阶段2: 保持恒定 (45%的训练步数)
+                torch.optim.lr_scheduler.ConstantLR(
+                    optimizer,
+                    factor=1.0,
+                    total_iters=int(0.45 * self.trainer.estimated_stepping_batches)
+                ),
+                # 阶段3: 余弦衰减 (50%的训练步数)
+                torch.optim.lr_scheduler.CosineAnnealingLR(
+                    optimizer,
+                    T_max=int(0.5 * self.trainer.estimated_stepping_batches),
+                    eta_min=self.config.opt.lr * 0.01  # 衰减到1e-7
+                )
+            ],
+            milestones=[
+                int(0.05 * self.trainer.estimated_stepping_batches),
+                int(0.5 * self.trainer.estimated_stepping_batches)
+            ]
         )
 
         return {
@@ -338,6 +356,22 @@ class MAST3RGaussians(L.LightningModule):
                 "interval": "step",
             },
         }
+
+    def on_after_backward(self):
+        # 监控新增模块梯度
+        total_norm = 0
+        for name, param in self.encoder.depth_fusion.named_parameters():
+            if param.grad is not None:
+                param_norm = param.grad.detach().data.norm(2)
+                total_norm += param_norm.item() ** 2
+                self.log(f"grads/{name}_norm", param_norm)
+
+        total_norm = total_norm ** 0.5
+        self.log("grads/total_norm", total_norm)
+
+        # 梯度裁剪（动态调整）
+        clip_value = max(0.5, 1 / (total_norm + 1e-8))
+        torch.nn.utils.clip_grad_norm_(self.parameters(), clip_value)
 
 
 def run_experiment(config):
