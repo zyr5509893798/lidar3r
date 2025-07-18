@@ -78,22 +78,38 @@ def rescale_image_depthmap(image, depthmap, camera_intrinsics, output_resolution
     # 深度图压缩方法改进：
     if depthmap is not None:
         scale_factor = max(output_resolution / input_resolution)
-        # 创建有效值掩码
-        valid_mask1 = (depthmap > 0).astype(np.float32)
+        # 1. 创建有效值掩码（先于任何处理）
+        valid_mask = (depthmap > 1e-6).astype(np.uint8)
 
-        # 使用最小值池化保留最近物体
-        kernel_size = int(1 / scale_factor) + 1
-        pooled_depth = minimum_filter(depthmap, size=kernel_size)
-        pooled_mask = minimum_filter(valid_mask1, size=kernel_size)
+        # 2. 仅处理有效区域 - 避免零值污染
+        valid_depth = depthmap.copy()
+        valid_depth[valid_mask == 0] = np.nan  # 将无效区域设为NaN
 
-        # 缩放处理后的深度图
-        depthmap = cv2.resize(pooled_depth, tuple(output_resolution),
-                              interpolation=cv2.INTER_NEAREST)
-        valid_mask1 = cv2.resize(pooled_mask, tuple(output_resolution),
-                                interpolation=cv2.INTER_NEAREST)
+        # 3. 使用中值滤波替代最小值滤波
+        kernel_size = max(1, int(0.5 / scale_factor))
+        kernel_size = min(kernel_size, 15)  # 限制最大核尺寸
 
-        # 恢复无效区域
-        depthmap[valid_mask1 < 0.5] = 0
+        # 使用中值滤波处理有效深度
+        from scipy.ndimage import median_filter
+        filtered_depth = median_filter(valid_depth, size=kernel_size, mode='constant', cval=np.nan)
+
+        # 4. 缩放时使用最近邻插值
+        depthmap_scaled = cv2.resize(
+            filtered_depth,
+            tuple(output_resolution),
+            interpolation=cv2.INTER_NEAREST
+        )
+
+        # 5. 缩放掩码并重新应用
+        mask_scaled = cv2.resize(
+            valid_mask.astype(float),
+            tuple(output_resolution),
+            interpolation=cv2.INTER_NEAREST
+        )
+        depthmap = np.where(mask_scaled > 0.5, depthmap_scaled, 0)
+
+        # 6. 后处理：移除可能残留的极小值
+        depthmap[depthmap < 1e-6] = 0
         # depthmap = cv2.resize(depthmap, output_resolution, fx=scale_final,
         #                       fy=scale_final, interpolation=cv2.INTER_NEAREST)
 
