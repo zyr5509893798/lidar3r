@@ -205,7 +205,8 @@ def log_batch_files(batch, color, depth, mask, view1, view2, pred1, pred2, save_
         torchvision.utils.save_image(color[b, ...], os.path.join(save_dir, f"sample_{b}_rendered_color.jpg"))
     if depth is not None:
         for b in range(min(color.shape[0], 4)):
-            torchvision.utils.save_image(depth[b, :, None, ...], os.path.join(save_dir, f"sample_{b}_rendered_depth.jpg"), normalize=True)
+            torchvision.utils.save_image(depth[b, ...], os.path.join(save_dir, f"sample_{b}_rendered_depth.jpg"), normalize=True)
+            # torchvision.utils.save_image(depth[b, :, None, ...], os.path.join(save_dir, f"sample_{b}_rendered_depth.jpg"), normalize=True)
 
     # Save the loss masks
     for b in range(min(mask.shape[0], 4)):

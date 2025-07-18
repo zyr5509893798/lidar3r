@@ -66,6 +66,6 @@ class DecoderSplattingCUDA(torch.nn.Module):
             scale_invariant=True,
             mode="depth"
         )
-        depth = rearrange(depth, "(b v) 1 h w -> b v h w", b=b, v=v)
+        # depth = rearrange(depth, "(b v) 1 h w -> b v h w", b=b, v=v)
 
         return color, depth  # 同时返回颜色和深度

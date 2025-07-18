@@ -35,7 +35,7 @@ loss:
   mse_loss_weight: 1.0
   lpips_loss_weight: 0.25
   mast3r_loss_weight: Null
-  depth_loss_weight: 1.0
+  depth_loss_weight: 0.5
   apply_mask: True
   average_over_mask: True
 

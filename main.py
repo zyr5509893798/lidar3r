@@ -221,16 +221,16 @@ class MAST3RGaussians(L.LightningModule):
         with self.benchmarker.time("encoder"):
             pred1, pred2 = self.forward(view1, view2)
         with self.benchmarker.time("decoder", num_calls=num_targets):
-            color, _ = self.decoder(batch, pred1, pred2, (h, w))
+            color, depth = self.decoder(batch, pred1, pred2, (h, w))
 
         # Calculate losses
         # mask = loss_mask.calculate_loss_mask(batch)
-        loss, mse, lpips= self.calculate_loss(
-            batch, color
+        loss, mse, lpips, depth_loss= self.calculate_loss(
+            batch, color, depth
         )
 
         # Log losses
-        self.log_metrics('test', loss, mse, lpips)
+        self.log_metrics('test', loss, mse, lpips, depth_loss)
         return loss
 
     def on_test_end(self):
@@ -279,6 +279,7 @@ class MAST3RGaussians(L.LightningModule):
 
         # 3. 只计算有效掩码区域
         depth_loss = (depth_l1 * valid_mask).sum() / (valid_mask.sum() + 1e-6)
+        # print("depthloss", depth_loss)
 
         # Calculate the total loss
         loss = 0
@@ -304,17 +305,19 @@ class MAST3RGaussians(L.LightningModule):
 
         return loss, mse_loss, lpips_loss, depth_loss  # 返回depth_loss
 
-    def log_metrics(self, prefix, loss, mse, lpips, ssim=None):
+    def log_metrics(self, prefix, loss, mse, lpips, depth_loss=None, ssim=None, ):
         values = {
             f'{prefix}/loss': loss,
             f'{prefix}/mse': mse,
             f'{prefix}/psnr': -10.0 * mse.log10(),
-            f'{prefix}/lpips': lpips,
-            f'{prefix}/depth_loss': depth_loss,  # 记录深度损失
+            f'{prefix}/lpips': lpips
         }
 
         if ssim is not None:
             values[f'{prefix}/ssim'] = ssim
+
+        if depth_loss is not None:
+            values[f'{prefix}/depth_loss']: depth_loss  # 记录深度损失
 
         prog_bar = prefix != 'val'
         sync_dist = prefix != 'train'
@@ -336,59 +339,59 @@ class MAST3RGaussians(L.LightningModule):
         param_groups = [
             {
                 'params': list(self.encoder.fusion_gate.parameters()),
-                'lr': self.config.opt.lr * 30,  # 3e-4
+                'lr': self.config.opt.lr * 300,  # 3e-4
                 'name': 'fusion'
             },
             {
                 'params': list(self.encoder.depth_encoder.parameters()),
-                'lr': self.config.opt.lr * 20,  # 2e-4
+                'lr': self.config.opt.lr * 200,  # 2e-4
                 'name': 'depth_enc'
             },
             {
                 'params': list(self.encoder.downstream_head1.parameters()) +
                           list(self.encoder.downstream_head2.parameters()),
-                'lr': self.config.opt.lr * 3,  # 3e-5
+                'lr': self.config.opt.lr* 10,  # 1e-5
                 'name': 'heads'
             }
         ]
-
-        optimizer = torch.optim.AdamW(
-            param_groups,
-            lr=self.config.opt.lr,
-            weight_decay=self.config.opt.weight_decay,
-            betas=(0.9, 0.98),  # 更保守的beta2
-            eps=1e-6
-        )
-
+        optimizer = torch.optim.Adam(param_groups, lr=self.config.opt.lr)
+        # optimizer = torch.optim.AdamW(
+        #     param_groups,
+        #     lr=self.config.opt.lr,
+        #     weight_decay=self.config.opt.weight_decay,
+        #     betas=(0.9, 0.98),  # 更保守的beta2
+        #     eps=1e-6
+        # )
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [self.config.opt.epochs // 2], gamma=0.1)
         # 使用阶梯式预热策略
-        scheduler = torch.optim.lr_scheduler.SequentialLR(
-            optimizer,
-            schedulers=[
-                # 阶段1: 线性预热 (5%的训练步数)
-                torch.optim.lr_scheduler.LinearLR(
-                    optimizer,
-                    start_factor=0.01,
-                    end_factor=1.0,
-                    total_iters=int(0.05 * self.trainer.estimated_stepping_batches)
-                ),
-                # 阶段2: 保持恒定 (45%的训练步数)
-                torch.optim.lr_scheduler.ConstantLR(
-                    optimizer,
-                    factor=1.0,
-                    total_iters=int(0.45 * self.trainer.estimated_stepping_batches)
-                ),
-                # 阶段3: 余弦衰减 (50%的训练步数)
-                torch.optim.lr_scheduler.CosineAnnealingLR(
-                    optimizer,
-                    T_max=int(0.5 * self.trainer.estimated_stepping_batches),
-                    eta_min=self.config.opt.lr * 0.01  # 衰减到1e-7
-                )
-            ],
-            milestones=[
-                int(0.05 * self.trainer.estimated_stepping_batches),
-                int(0.5 * self.trainer.estimated_stepping_batches)
-            ]
-        )
+        # scheduler = torch.optim.lr_scheduler.SequentialLR(
+        #     optimizer,
+        #     schedulers=[
+        #         # 阶段1: 线性预热 (5%的训练步数)
+        #         torch.optim.lr_scheduler.LinearLR(
+        #             optimizer,
+        #             start_factor=0.01,
+        #             end_factor=1.0,
+        #             total_iters=int(0.05 * self.trainer.estimated_stepping_batches)
+        #         ),
+        #         # 阶段2: 保持恒定 (45%的训练步数)
+        #         torch.optim.lr_scheduler.ConstantLR(
+        #             optimizer,
+        #             factor=1.0,
+        #             total_iters=int(0.45 * self.trainer.estimated_stepping_batches)
+        #         ),
+        #         # 阶段3: 余弦衰减 (50%的训练步数)
+        #         torch.optim.lr_scheduler.CosineAnnealingLR(
+        #             optimizer,
+        #             T_max=int(0.5 * self.trainer.estimated_stepping_batches),
+        #             eta_min=self.config.opt.lr * 0.01  # 衰减到1e-7
+        #         )
+        #     ],
+        #     milestones=[
+        #         int(0.05 * self.trainer.estimated_stepping_batches),
+        #         int(0.5 * self.trainer.estimated_stepping_batches)
+        #     ]
+        # )
 
         return {
             "optimizer": optimizer,

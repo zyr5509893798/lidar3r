@@ -196,7 +196,7 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
             overlaps.sort(key=lambda x: x[1], reverse=True)
             target_views = [frame for frame, _ in overlaps[:num_target_views]]
 
-        return [first_context_view, second_context_view], target_views, camera_id
+        return [first_context_view, second_context_view], [first_context_view], camera_id
 
         # return [first_context_view], [first_context_view]  # 先全用一张图和它自己测试模型
 
