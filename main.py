@@ -141,7 +141,14 @@ class MAST3RGaussians(L.LightningModule):
 
         # Predict using the encoder/decoder and calculate the loss
         pred1, pred2 = self.forward(view1, view2)
-        color, _ = self.decoder(batch, pred1, pred2, (h, w))
+        # color, _ = self.decoder(batch, pred1, pred2, (h, w))
+        # 修改获取decoder输出的部分
+        color, depth = self.decoder(batch, pred1, pred2, (h, w))  # 获取深度渲染结果
+
+        # 计算损失（传入深度）
+        loss, mse, lpips, depth_loss = self.calculate_loss(
+            batch, color, depth  # 添加depth参数
+        )
 
         # Calculate losses
         # loss掩码，确定哪些像素点参与loss计算
@@ -154,12 +161,12 @@ class MAST3RGaussians(L.LightningModule):
         # mask = loss_mask.calculate_loss_mask(batch)
 
         # loss也需要改
-        loss, mse, lpips = self.calculate_loss(
-            batch, color
-        )
+        # loss, mse, lpips = self.calculate_loss(
+        #     batch, color
+        # )
 
         # Log losses
-        self.log_metrics('train', loss, mse, lpips)
+        self.log_metrics('train', loss, mse, lpips, depth_loss)
         return loss
 
     def on_train_batch_start(self, batch, batch_idx):
@@ -185,16 +192,23 @@ class MAST3RGaussians(L.LightningModule):
 
         # Predict using the encoder/decoder and calculate the loss
         pred1, pred2 = self.forward(view1, view2)
-        color, _ = self.decoder(batch, pred1, pred2, (h, w))
+        # color, _ = self.decoder(batch, pred1, pred2, (h, w))
+        #
+        # # Calculate losses
+        # # mask = loss_mask.calculate_loss_mask(batch)
+        # loss, mse, lpips = self.calculate_loss(
+        #     batch, color
+        # )
+        # 修改获取decoder输出的部分
+        color, depth = self.decoder(batch, pred1, pred2, (h, w))  # 获取深度渲染结果
 
-        # Calculate losses
-        # mask = loss_mask.calculate_loss_mask(batch)
-        loss, mse, lpips = self.calculate_loss(
-            batch, color
+        # 计算损失（传入深度）
+        loss, mse, lpips, depth_loss = self.calculate_loss(
+            batch, color, depth  # 添加depth参数
         )
 
         # Log losses
-        self.log_metrics('val', loss, mse, lpips)
+        self.log_metrics('val', loss, mse, lpips, depth_loss)
         return loss
 
     def test_step(self, batch, batch_idx):
@@ -223,10 +237,14 @@ class MAST3RGaussians(L.LightningModule):
         benchmark_file_path = os.path.join(self.config.save_dir, "benchmark.json")
         self.benchmarker.dump(os.path.join(benchmark_file_path))
 
-    def calculate_loss(self, batch, color):
+    def calculate_loss(self, batch, color, depth):  # 添加depth参数
 
         target_color = torch.stack([target_view['original_img'] for target_view in batch['target']], dim=1)
         predicted_color = color
+
+        # 获取目标深度图和有效掩码
+        target_depth = torch.stack([target_view['depthmap'] for target_view in batch['target']], dim=1)
+        valid_mask = torch.stack([target_view['valid_mask'] for target_view in batch['target']], dim=1)
 
         # if apply_mask:
         #     assert mask.sum() > 0, "There are no valid pixels in the mask!"
@@ -252,10 +270,22 @@ class MAST3RGaussians(L.LightningModule):
         # else:
         lpips_loss = lpips_loss.mean()
 
+        # ===== 新增：深度损失计算 =====
+        # 1. 确保深度图在相同设备
+        depth = depth.to(valid_mask.device)
+
+        # 2. 计算绝对误差
+        depth_l1 = (depth - target_depth).abs()
+
+        # 3. 只计算有效掩码区域
+        depth_loss = (depth_l1 * valid_mask).sum() / (valid_mask.sum() + 1e-6)
+
         # Calculate the total loss
         loss = 0
         loss += self.config.loss.mse_loss_weight * mse_loss
         loss += self.config.loss.lpips_loss_weight * lpips_loss
+        # 4. 添加到总损失
+        loss += self.config.loss.depth_loss_weight * depth_loss
 
         # MAST3R Loss，单张图无法使用这个loss，不做匹配，去掉了
         # if self.config.loss.mast3r_loss_weight is not None:
@@ -272,7 +302,7 @@ class MAST3RGaussians(L.LightningModule):
         #         ssim_val = ssim_val.mean()
         #     return loss, mse_loss, lpips_loss, ssim_val
 
-        return loss, mse_loss, lpips_loss
+        return loss, mse_loss, lpips_loss, depth_loss  # 返回depth_loss
 
     def log_metrics(self, prefix, loss, mse, lpips, ssim=None):
         values = {
@@ -280,6 +310,7 @@ class MAST3RGaussians(L.LightningModule):
             f'{prefix}/mse': mse,
             f'{prefix}/psnr': -10.0 * mse.log10(),
             f'{prefix}/lpips': lpips,
+            f'{prefix}/depth_loss': depth_loss,  # 记录深度损失
         }
 
         if ssim is not None:
