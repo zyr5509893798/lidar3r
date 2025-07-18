@@ -10,6 +10,7 @@ os.environ["OPENCV_IO_ENABLE_OPENEXR"] = "1"
 import cv2  # noqa
 import numpy as np  # noqa
 from src.mast3r_src.dust3r.dust3r.utils.geometry import colmap_to_opencv_intrinsics, opencv_to_colmap_intrinsics  # noqa
+from scipy.ndimage import minimum_filter
 try:
     lanczos = PIL.Image.Resampling.LANCZOS
     bicubic = PIL.Image.Resampling.BICUBIC
@@ -78,21 +79,21 @@ def rescale_image_depthmap(image, depthmap, camera_intrinsics, output_resolution
     if depthmap is not None:
         scale_factor = max(output_resolution / input_resolution)
         # 创建有效值掩码
-        valid_mask = (depthmap > 0).astype(np.float32)
+        valid_mask1 = (depthmap > 0).astype(np.float32)
 
         # 使用最小值池化保留最近物体
         kernel_size = int(1 / scale_factor) + 1
         pooled_depth = minimum_filter(depthmap, size=kernel_size)
-        pooled_mask = minimum_filter(valid_mask, size=kernel_size)
+        pooled_mask = minimum_filter(valid_mask1, size=kernel_size)
 
         # 缩放处理后的深度图
         depthmap = cv2.resize(pooled_depth, tuple(output_resolution),
                               interpolation=cv2.INTER_NEAREST)
-        valid_mask = cv2.resize(pooled_mask, tuple(output_resolution),
+        valid_mask1 = cv2.resize(pooled_mask, tuple(output_resolution),
                                 interpolation=cv2.INTER_NEAREST)
 
         # 恢复无效区域
-        depthmap[valid_mask < 0.5] = 0
+        depthmap[valid_mask1 < 0.5] = 0
         # depthmap = cv2.resize(depthmap, output_resolution, fx=scale_final,
         #                       fy=scale_final, interpolation=cv2.INTER_NEAREST)
 
