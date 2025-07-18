@@ -8,7 +8,7 @@ import torchvision
 from src.mast3r_src.dust3r.dust3r.datasets.utils.transforms import ImgNorm
 from src.mast3r_src.dust3r.dust3r.utils.geometry import depthmap_to_absolute_camera_coordinates, geotrf
 from src.mast3r_src.dust3r.dust3r.utils.misc import invalid_to_zeros
-import src.mast3r_src.dust3r.dust3r.datasets.utils.cropping as cropping
+import utils.cropping as cropping
 
 
 def crop_resize_if_necessary(image, depthmap, intrinsics, resolution):
