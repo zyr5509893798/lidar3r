@@ -168,13 +168,13 @@ class MAST3RGaussians(L.LightningModule):
             self.log(f"lr/group_{i}", pg['lr'], prog_bar=(i == 0))
 
         # 监控新增模块梯度
-        for name, param in self.encoder.depth_fusion.named_parameters():
+        for name, param in self.encoder.fusion_gate.named_parameters():
             if param.grad is not None:
                 self.log(f"grad_norm/fusion/{name}", param.grad.norm())
 
     def on_train_epoch_end(self):
         # 检查新增模块权重变化
-        for name, param in self.encoder.depth_fusion.named_parameters():
+        for name, param in self.encoder.fusion_gate.named_parameters():
             self.log(f"weight_mean/fusion/{name}", param.data.mean())
             self.log(f"weight_std/fusion/{name}", param.data.std())
 
@@ -370,7 +370,7 @@ class MAST3RGaussians(L.LightningModule):
     def on_after_backward(self):
         # 监控新增模块梯度
         total_norm = 0
-        for name, param in self.encoder.depth_fusion.named_parameters():
+        for name, param in self.encoder.fusion_gate.named_parameters():
             if param.grad is not None:
                 param_norm = param.grad.detach().data.norm(2)
                 total_norm += param_norm.item() ** 2

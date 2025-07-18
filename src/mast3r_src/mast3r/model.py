@@ -18,6 +18,7 @@ from dust3r.model import AsymmetricCroCo3DStereo  # noqa
 from dust3r.utils.misc import transpose_to_landscape  # noqa
 from ..dust3r.dust3r.patch_embed import get_patch_embed as dust3r_patch_embed # 我们有了自己的patch_embed用于处理深度图mlp，这里要换个名字
 from .patch_embed import get_patch_embed # pow3r设计的
+from functools import partial
 
 
 inf = float('inf')
@@ -107,6 +108,7 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         self.patch_embed_cls = patch_embed_cls
 
 
+
         super().__init__(**kwargs)
         self.patch_ln = nn.Identity()
 
@@ -131,7 +133,7 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
 
         return torch.stack(feat_maps)  # [B, C, H, W]
 
-    def _set_patch_embed(self, img_size=224, patch_size=16, enc_embed_dim=768):
+    def _set_patch_embed(self, img_size=224, patch_size=16, enc_embed_dim=768, norm_layer=partial(nn.LayerNorm, eps=1e-6)):
         self.patch_embed = dust3r_patch_embed(self.patch_embed_cls, img_size, patch_size, enc_embed_dim)
         # 这个get_patch_embed是pow3r实现的，一个用于深度图的方法。
         # self.patch_embed_depth = get_patch_embed(self.patch_embed_cls + '_Mlp', img_size, patch_size, enc_embed_dim,
@@ -139,7 +141,7 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         # 保存关键尺寸信息
         self.patch_size = patch_size
         self.img_size = img_size
-
+        self.enc_norm = norm_layer(enc_embed_dim)
         # 计算特征图尺寸 (ViT输出维度)
         self.feat_height = img_size[0] // patch_size
         self.feat_width = img_size[1] // patch_size
