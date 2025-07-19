@@ -146,7 +146,7 @@ class MAST3RGaussians(L.LightningModule):
         color, depth = self.decoder(batch, pred1, pred2, (h, w))  # 获取深度渲染结果
 
         # 计算损失（传入深度）
-        loss, mse, lpips, depth_loss = self.calculate_loss(
+        loss, mse, lpips= self.calculate_loss(
             batch, color # 添加depth参数
         )
 
@@ -203,7 +203,7 @@ class MAST3RGaussians(L.LightningModule):
         color, depth = self.decoder(batch, pred1, pred2, (h, w))  # 获取深度渲染结果
 
         # 计算损失（传入深度）
-        loss, mse, lpips, depth_loss = self.calculate_loss(
+        loss, mse, lpips = self.calculate_loss(
             batch, color# 添加depth参数
         )
 
@@ -225,7 +225,7 @@ class MAST3RGaussians(L.LightningModule):
 
         # Calculate losses
         # mask = loss_mask.calculate_loss_mask(batch)
-        loss, mse, lpips, depth_loss= self.calculate_loss(
+        loss, mse, lpips= self.calculate_loss(
             batch, color
         )
 

@@ -237,8 +237,8 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         # depth2_input = torch.stack([depth2, mask2], dim=1) if depth2 is not None else None
 
         # 编码图像
-        tokens1, pos1, depth_feat1 = self._encode_image(img1, shape1)
-        tokens2, pos2, depth_feat2 = self._encode_image(img2, shape2)
+        tokens1, pos1 = self._encode_image(img1, shape1)
+        tokens2, pos2= self._encode_image(img2, shape2)
 
         return (shape1, shape2), (tokens1, tokens2), (pos1, pos2)
 
