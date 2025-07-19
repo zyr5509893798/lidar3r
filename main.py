@@ -62,8 +62,8 @@ class MAST3RGaussians(L.LightningModule):
         self.encoder.requires_grad_(False)
 
         # 解冻新增的深度融合模块
-        self.encoder.fusion_gate.requires_grad_(True)
-        self.encoder.depth_encoder.requires_grad_(True)
+        # self.encoder.fusion_gate.requires_grad_(True)
+        # self.encoder.depth_encoder.requires_grad_(True)
 
         # 解冻原始模型中需要训练的部分
         self.encoder.downstream_head1.gaussian_dpt.dpt.requires_grad_(True)
@@ -92,22 +92,22 @@ class MAST3RGaussians(L.LightningModule):
 
     def forward(self, view1, view2):
 
-        # # Freeze the encoder and decoder
-        # (shape1, shape2), (feat1, feat2), (pos1, pos2) = self.encoder._encode_symmetrized(view1, view2)
-        #
-        # with torch.no_grad():
-        #     # (shape1, shape2), (feat1, feat2), (pos1, pos2) = self.encoder._encode_symmetrized(view1, view2)
-        #     dec1, dec2 = self.encoder._decoder(feat1, pos1, feat2, pos2)
+        # Freeze the encoder and decoder
+        with torch.no_grad():
+            (shape1, shape2), (feat1, feat2), (pos1, pos2) = self.encoder._encode_symmetrized(view1, view2)
+            dec1, dec2 = self.encoder._decoder(feat1, pos1, feat2, pos2)
+
+
         # 编码
-        (shape1, shape2), (tokens1, tokens2), (pos1, pos2), (depth_feat1, depth_feat2) = self.encoder._encode_symmetrized(view1, view2)
+        # (shape1, shape2), (tokens1, tokens2), (pos1, pos2) = self.encoder._encode_symmetrized(view1, view2)
 
         # 特征融合
-        tokens1_fused = self.encoder._fuse_features(tokens1, shape1, depth_feat1)
-        tokens2_fused = self.encoder._fuse_features(tokens2, shape2, depth_feat2)
+        # tokens1_fused = self.encoder._fuse_features(tokens1, shape1, depth_feat1)
+        # tokens2_fused = self.encoder._fuse_features(tokens2, shape2, depth_feat2)
 
-        with torch.no_grad():
-            # 解码器处理融合特征
-            dec1, dec2 = self.encoder._decoder(tokens1_fused, pos1, tokens2_fused, pos2)
+        # with torch.no_grad():
+        #     # 解码器处理融合特征
+        #     dec1, dec2 = self.encoder._decoder(tokens1_fused, pos1, tokens2_fused, pos2)
 
         # Train the downstream heads
         pred1 = self.encoder._downstream_head(1, [tok.float() for tok in dec1], shape1)
@@ -147,7 +147,7 @@ class MAST3RGaussians(L.LightningModule):
 
         # 计算损失（传入深度）
         loss, mse, lpips, depth_loss = self.calculate_loss(
-            batch, color, depth  # 添加depth参数
+            batch, color # 添加depth参数
         )
 
         # Calculate losses
@@ -166,24 +166,24 @@ class MAST3RGaussians(L.LightningModule):
         # )
 
         # Log losses
-        self.log_metrics('train', loss, mse, lpips, depth_loss)
+        self.log_metrics('train', loss, mse, lpips)
         return loss
 
-    def on_train_batch_start(self, batch, batch_idx):
-        # 记录各参数组学习率
-        for i, pg in enumerate(self.optimizers().param_groups):
-            self.log(f"lr/group_{i}", pg['lr'], prog_bar=(i == 0))
+    # def on_train_batch_start(self, batch, batch_idx):
+    #     # 记录各参数组学习率
+    #     for i, pg in enumerate(self.optimizers().param_groups):
+    #         self.log(f"lr/group_{i}", pg['lr'], prog_bar=(i == 0))
+    #
+    #     # 监控新增模块梯度
+    #     for name, param in self.encoder.fusion_gate.named_parameters():
+    #         if param.grad is not None:
+    #             self.log(f"grad_norm/fusion/{name}", param.grad.norm())
 
-        # 监控新增模块梯度
-        for name, param in self.encoder.fusion_gate.named_parameters():
-            if param.grad is not None:
-                self.log(f"grad_norm/fusion/{name}", param.grad.norm())
-
-    def on_train_epoch_end(self):
-        # 检查新增模块权重变化
-        for name, param in self.encoder.fusion_gate.named_parameters():
-            self.log(f"weight_mean/fusion/{name}", param.data.mean())
-            self.log(f"weight_std/fusion/{name}", param.data.std())
+    # def on_train_epoch_end(self):
+    #     # 检查新增模块权重变化
+    #     for name, param in self.encoder.fusion_gate.named_parameters():
+    #         self.log(f"weight_mean/fusion/{name}", param.data.mean())
+    #         self.log(f"weight_std/fusion/{name}", param.data.std())
 
     def validation_step(self, batch, batch_idx):
 
@@ -204,11 +204,11 @@ class MAST3RGaussians(L.LightningModule):
 
         # 计算损失（传入深度）
         loss, mse, lpips, depth_loss = self.calculate_loss(
-            batch, color, depth  # 添加depth参数
+            batch, color# 添加depth参数
         )
 
         # Log losses
-        self.log_metrics('val', loss, mse, lpips, depth_loss)
+        self.log_metrics('val', loss, mse, lpips)
         return loss
 
     def test_step(self, batch, batch_idx):
@@ -226,25 +226,25 @@ class MAST3RGaussians(L.LightningModule):
         # Calculate losses
         # mask = loss_mask.calculate_loss_mask(batch)
         loss, mse, lpips, depth_loss= self.calculate_loss(
-            batch, color, depth
+            batch, color
         )
 
         # Log losses
-        self.log_metrics('test', loss, mse, lpips, depth_loss)
+        self.log_metrics('test', loss, mse, lpips)
         return loss
 
     def on_test_end(self):
         benchmark_file_path = os.path.join(self.config.save_dir, "benchmark.json")
         self.benchmarker.dump(os.path.join(benchmark_file_path))
 
-    def calculate_loss(self, batch, color, depth):  # 添加depth参数
+    def calculate_loss(self, batch, color):  # 添加depth参数
 
         target_color = torch.stack([target_view['original_img'] for target_view in batch['target']], dim=1)
         predicted_color = color
 
         # 获取目标深度图和有效掩码
-        target_depth = torch.stack([target_view['depthmap'] for target_view in batch['target']], dim=1)
-        valid_mask = torch.stack([target_view['valid_mask'] for target_view in batch['target']], dim=1)
+        # target_depth = torch.stack([target_view['depthmap'] for target_view in batch['target']], dim=1)
+        # valid_mask = torch.stack([target_view['valid_mask'] for target_view in batch['target']], dim=1)
 
         # if apply_mask:
         #     assert mask.sum() > 0, "There are no valid pixels in the mask!"
@@ -272,13 +272,13 @@ class MAST3RGaussians(L.LightningModule):
 
         # ===== 新增：深度损失计算 =====
         # 1. 确保深度图在相同设备
-        depth = depth.to(valid_mask.device)
-
-        # 2. 计算绝对误差
-        depth_l1 = (depth - target_depth).abs()
-
-        # 3. 只计算有效掩码区域
-        depth_loss = (depth_l1 * valid_mask).sum() / (valid_mask.sum() + 1e-6)
+        # depth = depth.to(valid_mask.device)
+        #
+        # # 2. 计算绝对误差
+        # depth_l1 = (depth - target_depth).abs()
+        #
+        # # 3. 只计算有效掩码区域
+        # depth_loss = (depth_l1 * valid_mask).sum() / (valid_mask.sum() + 1e-6)
         # print("depthloss", depth_loss)
 
         # Calculate the total loss
@@ -286,7 +286,7 @@ class MAST3RGaussians(L.LightningModule):
         loss += self.config.loss.mse_loss_weight * mse_loss
         loss += self.config.loss.lpips_loss_weight * lpips_loss
         # 4. 添加到总损失
-        loss += self.config.loss.depth_loss_weight * depth_loss
+        # loss += self.config.loss.depth_loss_weight * depth_loss
 
         # MAST3R Loss，单张图无法使用这个loss，不做匹配，去掉了
         # if self.config.loss.mast3r_loss_weight is not None:
@@ -303,15 +303,15 @@ class MAST3RGaussians(L.LightningModule):
         #         ssim_val = ssim_val.mean()
         #     return loss, mse_loss, lpips_loss, ssim_val
 
-        return loss, mse_loss, lpips_loss, depth_loss  # 返回depth_loss
+        return loss, mse_loss, lpips_loss
 
-    def log_metrics(self, prefix, loss, mse, lpips, depth_loss, ssim=None, ):
+    def log_metrics(self, prefix, loss, mse, lpips, ssim=None, ):
         values = {
             f'{prefix}/loss': loss,
             f'{prefix}/mse': mse,
             f'{prefix}/psnr': -10.0 * mse.log10(),
             f'{prefix}/lpips': lpips,
-            f'{prefix}/depth_loss': depth_loss
+            # f'{prefix}/depth_loss': depth_loss
         }
 
         if ssim is not None:
@@ -324,99 +324,99 @@ class MAST3RGaussians(L.LightningModule):
         sync_dist = prefix != 'train'
         self.log_dict(values, prog_bar=prog_bar, sync_dist=sync_dist, batch_size=self.config.data.batch_size)
 
-    # def configure_optimizers(self):
-    #     optimizer = torch.optim.Adam(self.encoder.parameters(), lr=self.config.opt.lr)
-    #     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [self.config.opt.epochs // 2], gamma=0.1)
-    #     return {
-    #         "optimizer": optimizer,
-    #         "lr_scheduler": {
-    #             "scheduler": scheduler,
-    #             "interval": "epoch",
-    #             "frequency": 1,
-    #         },
-    #     }
     def configure_optimizers(self):
-        # 更保守的分组学习率
-        param_groups = [
-            {
-                'params': list(self.encoder.fusion_gate.parameters()),
-                'lr': self.config.opt.lr * 300,  # 3e-4
-                'name': 'fusion'
-            },
-            {
-                'params': list(self.encoder.depth_encoder.parameters()),
-                'lr': self.config.opt.lr * 200,  # 2e-4
-                'name': 'depth_enc'
-            },
-            {
-                'params': list(self.encoder.downstream_head1.parameters()) +
-                          list(self.encoder.downstream_head2.parameters()),
-                'lr': self.config.opt.lr* 10,  # 1e-5
-                'name': 'heads'
-            }
-        ]
-        optimizer = torch.optim.Adam(param_groups, lr=self.config.opt.lr)
-        # optimizer = torch.optim.AdamW(
-        #     param_groups,
-        #     lr=self.config.opt.lr,
-        #     weight_decay=self.config.opt.weight_decay,
-        #     betas=(0.9, 0.98),  # 更保守的beta2
-        #     eps=1e-6
-        # )
+        optimizer = torch.optim.Adam(self.encoder.parameters(), lr=self.config.opt.lr)
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [self.config.opt.epochs // 2], gamma=0.1)
-        # 使用阶梯式预热策略
-        # scheduler = torch.optim.lr_scheduler.SequentialLR(
-        #     optimizer,
-        #     schedulers=[
-        #         # 阶段1: 线性预热 (5%的训练步数)
-        #         torch.optim.lr_scheduler.LinearLR(
-        #             optimizer,
-        #             start_factor=0.01,
-        #             end_factor=1.0,
-        #             total_iters=int(0.05 * self.trainer.estimated_stepping_batches)
-        #         ),
-        #         # 阶段2: 保持恒定 (45%的训练步数)
-        #         torch.optim.lr_scheduler.ConstantLR(
-        #             optimizer,
-        #             factor=1.0,
-        #             total_iters=int(0.45 * self.trainer.estimated_stepping_batches)
-        #         ),
-        #         # 阶段3: 余弦衰减 (50%的训练步数)
-        #         torch.optim.lr_scheduler.CosineAnnealingLR(
-        #             optimizer,
-        #             T_max=int(0.5 * self.trainer.estimated_stepping_batches),
-        #             eta_min=self.config.opt.lr * 0.01  # 衰减到1e-7
-        #         )
-        #     ],
-        #     milestones=[
-        #         int(0.05 * self.trainer.estimated_stepping_batches),
-        #         int(0.5 * self.trainer.estimated_stepping_batches)
-        #     ]
-        # )
-
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "interval": "step",
+                "interval": "epoch",
+                "frequency": 1,
             },
         }
+    # def configure_optimizers(self):
+    #     # 更保守的分组学习率
+    #     param_groups = [
+    #         {
+    #             'params': list(self.encoder.fusion_gate.parameters()),
+    #             'lr': self.config.opt.lr * 300,  # 3e-4
+    #             'name': 'fusion'
+    #         },
+    #         {
+    #             'params': list(self.encoder.depth_encoder.parameters()),
+    #             'lr': self.config.opt.lr * 200,  # 2e-4
+    #             'name': 'depth_enc'
+    #         },
+    #         {
+    #             'params': list(self.encoder.downstream_head1.parameters()) +
+    #                       list(self.encoder.downstream_head2.parameters()),
+    #             'lr': self.config.opt.lr* 10,  # 1e-5
+    #             'name': 'heads'
+    #         }
+    #     ]
+    #     optimizer = torch.optim.Adam(param_groups, lr=self.config.opt.lr)
+    #     # optimizer = torch.optim.AdamW(
+    #     #     param_groups,
+    #     #     lr=self.config.opt.lr,
+    #     #     weight_decay=self.config.opt.weight_decay,
+    #     #     betas=(0.9, 0.98),  # 更保守的beta2
+    #     #     eps=1e-6
+    #     # )
+    #     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [self.config.opt.epochs // 2], gamma=0.1)
+    #     # 使用阶梯式预热策略
+    #     # scheduler = torch.optim.lr_scheduler.SequentialLR(
+    #     #     optimizer,
+    #     #     schedulers=[
+    #     #         # 阶段1: 线性预热 (5%的训练步数)
+    #     #         torch.optim.lr_scheduler.LinearLR(
+    #     #             optimizer,
+    #     #             start_factor=0.01,
+    #     #             end_factor=1.0,
+    #     #             total_iters=int(0.05 * self.trainer.estimated_stepping_batches)
+    #     #         ),
+    #     #         # 阶段2: 保持恒定 (45%的训练步数)
+    #     #         torch.optim.lr_scheduler.ConstantLR(
+    #     #             optimizer,
+    #     #             factor=1.0,
+    #     #             total_iters=int(0.45 * self.trainer.estimated_stepping_batches)
+    #     #         ),
+    #     #         # 阶段3: 余弦衰减 (50%的训练步数)
+    #     #         torch.optim.lr_scheduler.CosineAnnealingLR(
+    #     #             optimizer,
+    #     #             T_max=int(0.5 * self.trainer.estimated_stepping_batches),
+    #     #             eta_min=self.config.opt.lr * 0.01  # 衰减到1e-7
+    #     #         )
+    #     #     ],
+    #     #     milestones=[
+    #     #         int(0.05 * self.trainer.estimated_stepping_batches),
+    #     #         int(0.5 * self.trainer.estimated_stepping_batches)
+    #     #     ]
+    #     # )
+    #
+    #     return {
+    #         "optimizer": optimizer,
+    #         "lr_scheduler": {
+    #             "scheduler": scheduler,
+    #             "interval": "step",
+    #         },
+    #     }
 
-    def on_after_backward(self):
-        # 监控新增模块梯度
-        total_norm = 0
-        for name, param in self.encoder.fusion_gate.named_parameters():
-            if param.grad is not None:
-                param_norm = param.grad.detach().data.norm(2)
-                total_norm += param_norm.item() ** 2
-                self.log(f"grads/{name}_norm", param_norm)
-
-        total_norm = total_norm ** 0.5
-        self.log("grads/total_norm", total_norm)
-
-        # 梯度裁剪（动态调整）
-        clip_value = max(0.5, 1 / (total_norm + 1e-8))
-        torch.nn.utils.clip_grad_norm_(self.parameters(), clip_value)
+    # def on_after_backward(self):
+    #     # 监控新增模块梯度
+    #     total_norm = 0
+    #     for name, param in self.encoder.fusion_gate.named_parameters():
+    #         if param.grad is not None:
+    #             param_norm = param.grad.detach().data.norm(2)
+    #             total_norm += param_norm.item() ** 2
+    #             self.log(f"grads/{name}_norm", param_norm)
+    #
+    #     total_norm = total_norm ** 0.5
+    #     self.log("grads/total_norm", total_norm)
+    #
+    #     # 梯度裁剪（动态调整）
+    #     clip_value = max(0.5, 1 / (total_norm + 1e-8))
+    #     torch.nn.utils.clip_grad_norm_(self.parameters(), clip_value)
 
 
 def run_experiment(config):
