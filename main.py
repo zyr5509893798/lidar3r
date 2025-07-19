@@ -305,19 +305,20 @@ class MAST3RGaussians(L.LightningModule):
 
         return loss, mse_loss, lpips_loss, depth_loss  # 返回depth_loss
 
-    def log_metrics(self, prefix, loss, mse, lpips, depth_loss=None, ssim=None, ):
+    def log_metrics(self, prefix, loss, mse, lpips, depth_loss, ssim=None, ):
         values = {
             f'{prefix}/loss': loss,
             f'{prefix}/mse': mse,
             f'{prefix}/psnr': -10.0 * mse.log10(),
-            f'{prefix}/lpips': lpips
+            f'{prefix}/lpips': lpips,
+            f'{prefix}/depth_loss': depth_loss
         }
 
         if ssim is not None:
             values[f'{prefix}/ssim'] = ssim
 
-        if depth_loss is not None:
-            values[f'{prefix}/depth_loss']: depth_loss  # 记录深度损失
+        # if depth_loss is not None:
+        #     values[f'{prefix}/depth_loss']: depth_loss  # 记录深度损失
 
         prog_bar = prefix != 'val'
         sync_dist = prefix != 'train'

@@ -91,7 +91,7 @@ def rescale_image_depthmap(image, depthmap, camera_intrinsics, output_resolution
 
         # 使用中值滤波处理有效深度
         from scipy.ndimage import median_filter
-        filtered_depth = median_filter(valid_depth, size=kernel_size, mode='constant', cval=np.nan)
+        filtered_depth = minimum_filter(valid_depth, size=kernel_size, mode='constant', cval=np.nan)
 
         # 4. 缩放时使用最近邻插值
         depthmap_scaled = cv2.resize(
