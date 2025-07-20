@@ -13,8 +13,11 @@ loggers:
   use_wandb: False
 
 # Model
-use_pretrained: True
+use_pretrained: False
 pretrained_mast3r_path: './checkpoints/MASt3R_ViTLarge_BaseDecoder_512_catmlpdpt_metric.pth'
+
+use_self_pretrained: True
+pretrained_lidar3r_path: './results/2025-07-19-16-58-53/2025-07-19-16-58-53/version_0/checkpoints/epoch=4-step=14000.ckpt'
 
 # Data
 data:

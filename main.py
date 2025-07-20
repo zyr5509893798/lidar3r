@@ -465,6 +465,12 @@ def run_experiment(config):
     # Model
     print('Loading Model')
     model = MAST3RGaussians(config)
+    if config.use_self_pretrained:
+        ckpt = torch.load(config.pretrained_lidar3r_path)
+        # print("简明快来", ckpt.keys())
+        _ = model.load_state_dict(ckpt['state_dict'], strict=False)
+        del ckpt
+
     if config.use_pretrained:
         ckpt = torch.load(config.pretrained_mast3r_path)
         _ = model.encoder.load_state_dict(ckpt['model'], strict=False)
