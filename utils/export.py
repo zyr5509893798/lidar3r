@@ -17,7 +17,7 @@ class SaveBatchData(L.Callback):
     '''A Lightning callback that occasionally saves batch inputs and outputs to disk.
     It is not critical to the training process, and can be disabled if unwanted.'''
 
-    def __init__(self, save_dir, train_save_interval=100, val_save_interval=100, test_save_interval=100):
+    def __init__(self, save_dir, train_save_interval=2800, val_save_interval=100, test_save_interval=100):
         self.save_dir = save_dir
         self.train_save_interval = train_save_interval
         self.val_save_interval = val_save_interval
