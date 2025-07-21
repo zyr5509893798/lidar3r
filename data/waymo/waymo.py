@@ -217,8 +217,11 @@ class WaymoData:
         valid_mask = (depth_map > 1e-6).astype(np.float32)  # 转换为float32
         sky_mask = depth_map <= 0.0
 
-        # 标准化深度图
+        # 归一化
         normalized_depth = normalize_depth_map(depth_map)  # (H, W)
+
+        # 更换了函数，伪rgb深度图
+        rgb_depthmap = depth_to_pseudorgb(depth_map)  # (H, W, 3)
 
         # 创建两通道深度图 [2, H, W],这里调整到model内部进行堆叠，因为loss_mask要使用一维深度图。必须是{H W]
         # depth_two_channel = np.stack([normalized_depth, valid_mask], axis=0)  # 直接堆叠为 [2, H, W]
@@ -226,6 +229,7 @@ class WaymoData:
         return {
             'original_img': rgb_image,
             'depthmap': normalized_depth,  # 形状 [H, W]
+            'rgb_depthmap': rgb_depthmap,  # (H, W, 3)
             'camera_pose': c2w,
             'camera_intrinsics': intrinsics,
             'dataset': 'waymo',
@@ -349,3 +353,33 @@ def reconstruct_depth_map(depth_data, original_shape):
     depth_map[mask] = values
     return depth_map
 
+
+def depth_to_pseudorgb(depth_map, max_depth=100.0):
+    """
+    将深度图转换为伪RGB格式（三通道图像）
+    保留原始深度值信息，同时转换为可视化友好的RGB格式
+
+    参数:
+        depth_map: 原始深度图 (H, W) 二维数组
+        max_depth: 最大深度值，用于颜色映射范围
+
+    返回:
+        pseudo_rgb: 伪RGB图像 (H, W, 3) 三通道数组，注意这个通道位置。
+    """
+    # 创建深度图的副本，避免修改原始数据
+    depth_copy = np.copy(depth_map)
+
+    # 将无效深度值设为NaN（避免干扰颜色映射）
+    depth_copy[depth_copy <= 0] = np.nan
+
+    # 归一化深度值到[0,1]范围（仅用于颜色映射）
+    normalized = np.clip(depth_copy / max_depth, 0, 1)
+
+    # 应用Jet颜色映射（OpenCV的COLORMAP_JET）
+    pseudo_rgb = cv2.applyColorMap((normalized * 255).astype(np.uint8), cv2.COLORMAP_JET)
+
+    # 将无效区域设为黑色
+    invalid_mask = np.isnan(depth_copy)
+    pseudo_rgb[invalid_mask] = [255, 255, 255]  # BGR白色
+
+    return pseudo_rgb

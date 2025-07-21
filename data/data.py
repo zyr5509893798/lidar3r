@@ -107,8 +107,10 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
             view = self.data.get_view(sequence, c_view, camera_id, self.resolution) # 从各种路径和id中取真实的这一帧的图像，深度图，ctw等
 
             # Transform the input
-            view['img'] = self.transform(view['original_img']) # 图像转换
+            view['img'] = self.transform(view['original_img'])  # 图像转换
+            view['depth'] = self.transform(view['rgb_depthmap'])  # 伪rgb深度图转换
             view['original_img'] = self.org_transform(view['original_img'])
+            view['rgb_depthmap'] = self.org_transform(view['rgb_depthmap'])
 
             # Create the point cloud and validity mask
             # pts3d：世界坐标系下的点云图，每个像素对应一个xyz，HxWx3
@@ -125,6 +127,7 @@ class DUST3RSplattingDataset(torch.utils.data.Dataset):
             # 参照图像只需要对原图进行简单处理。
             view = self.data.get_view(sequence, t_view, camera_id, self.resolution)
             view['original_img'] = self.org_transform(view['original_img'])
+            view['rgb_depthmap'] = self.org_transform(view['rgb_depthmap'])
             views['target'].append(view)
 
         return views
@@ -275,7 +278,10 @@ class DUST3RSplattingTestDataset(torch.utils.data.Dataset):
 
         # Transform the input
         view['img'] = self.transform(view['original_img'])
+        view['depth'] = self.transform(view['rgb_depthmap'])  # 伪rgb深度图转换
         view['original_img'] = self.org_transform(view['original_img'])
+        view['rgb_depthmap'] = self.org_transform(view['rgb_depthmap'])
+
 
         # Create the point cloud and validity mask
         # pts3d, valid_mask = depthmap_to_absolute_camera_coordinates(**view)

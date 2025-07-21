@@ -136,8 +136,8 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
     def _set_patch_embed(self, img_size=224, patch_size=16, enc_embed_dim=768, norm_layer=partial(nn.LayerNorm, eps=1e-6)):
         self.patch_embed = dust3r_patch_embed(self.patch_embed_cls, img_size, patch_size, enc_embed_dim)
         # 这个get_patch_embed是pow3r实现的，一个用于深度图的方法。
-        # self.patch_embed_depth = get_patch_embed(self.patch_embed_cls + '_Mlp', img_size, patch_size, enc_embed_dim,
-        #                                          in_chans=2)
+        self.patch_embed_depth = get_patch_embed(self.patch_embed_cls + '_Mlp', img_size, patch_size, enc_embed_dim,
+                                                 in_chans=3)
         # 保存关键尺寸信息
         self.patch_size = patch_size
         self.img_size = img_size
@@ -153,57 +153,13 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
             depth_channels=32
         )
 
-    # def _encode_symmetrized(self, view1):
-    #     """重写编码方法：使用单视图的RGB和深度图作为双输入""" 这里已经暂时被废弃了。现在用的是pow3r方法
-    #     # 从单视图字典中提取RGB和深度图
-    #     img1 = view1['img']  # RGB图像 [B, 3, H, W]
-    #
-    #     # 获取深度图并确保是三通道
-    #     depthmap = view1['depthmap']
-    #     if depthmap.dim() == 3:  # 如果是单通道 [B, H, W]
-    #         depthmap = depthmap.unsqueeze(1)  # 添加通道维度 [B, 1, H, W]
-    #
-    #     # 如果深度图是单通道，转换为三通道伪RGB
-    #     if depthmap.size(1) == 1:
-    #         # 标准化深度值：截断 + 归一化
-    #         depthmap = torch.clamp(depthmap, 0, self.max_depth) / self.max_depth
-    #         # 复制为三通道
-    #         depthmap = depthmap.repeat(1, 3, 1, 1)  # [B, 3, H, W]
-    #
-    #     # 获取图像真实尺寸（考虑数据增强后的裁剪）
-    #     B = img1.shape[0]
-    #     shape1 = view1.get('true_shape', torch.tensor(img1.shape[-2:])[None].repeat(B, 1))
-    #     shape2 = shape1.clone()  # 深度图与RGB同尺寸
-    #
-    #     # 编码图像对（RGB + 深度伪RGB）
-    #     feat1, feat2, pos1, pos2 = self._encode_image_pairs(img1, depthmap, shape1, shape2)
-    #
-    #     return (shape1, shape2), (feat1, feat2), (pos1, pos2)
-
-
-
     # 从pow3r那里搞来的encoder图像处理，包括了深度。
     def _encode_image(self, image, true_shape, depth=None):
-        # """改进的图像编码方法：使用多阶段融合"""
-        # if depth is not None:
-        #     # 分离深度和掩码
-        #     depth_map = depth[:, 0:1]  # [B,1,H,W]
-        #     mask = depth[:, 1:2]       # [B,1,H,W]
-        #
-        #     # 应用掩码
-        #     depth_map = depth_map * mask
-        #
-        #     # 深度特征增强
-        #     depth_feat = self.depth_encoder(depth)
-        #
-        #     # 拼接RGB和增强后的深度特征
-        #     image_with_depth = torch.cat([image, depth_feat], dim=1)
-        #
-        #     # 通过深度融合模块
-        #     fused_image = self.depth_fusion(image_with_depth)
-        # else:
-        #     fused_image = image
         x, pos = self.patch_embed(image, true_shape=true_shape)
+
+        # 在这里增加一个深度分片
+        if depth is not None:
+            x_d, pos_d = self.patch_embed_depth(depth, true_shape=true_shape)
 
         # add positional embedding without cls token
         assert self.enc_pos_embed is None
@@ -230,17 +186,17 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         shape2 = view2.get('true_shape', torch.tensor(img2.shape[-2:])[None].repeat(B, 1))
 
         # 准备深度输入
-        depth1 = view1.get('depthmap', None)
+        depth1 = view1.get('depth', None)
         mask1 = view1.get('valid_mask', None)
-        depth1_input = torch.stack([depth1, mask1], dim=1) if depth1 is not None else None
+        # depth1_input = torch.stack([depth1, mask1], dim=1) if depth1 is not None else None
 
-        depth2 = view2.get('depthmap', None)
+        depth2 = view2.get('depth', None)
         mask2 = view2.get('valid_mask', None)
-        depth2_input = torch.stack([depth2, mask2], dim=1) if depth2 is not None else None
+        # depth2_input = torch.stack([depth2, mask2], dim=1) if depth2 is not None else None
 
         # 编码图像
-        tokens1, pos1, depth_feat1 = self._encode_image(img1, shape1, depth=depth1_input)
-        tokens2, pos2, depth_feat2 = self._encode_image(img2, shape2, depth=depth2_input)
+        tokens1, pos1, depth_feat1 = self._encode_image(img1, shape1, depth=depth1)
+        tokens2, pos2, depth_feat2 = self._encode_image(img2, shape2, depth=depth2)
 
         return (shape1, shape2), (tokens1, tokens2), (pos1, pos2), (depth_feat1, depth_feat2)
 
