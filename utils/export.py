@@ -17,7 +17,7 @@ class SaveBatchData(L.Callback):
     '''A Lightning callback that occasionally saves batch inputs and outputs to disk.
     It is not critical to the training process, and can be disabled if unwanted.'''
 
-    def __init__(self, save_dir, train_save_interval=2800, val_save_interval=100, test_save_interval=100):
+    def __init__(self, save_dir, train_save_interval=1000, val_save_interval=100, test_save_interval=100):
         self.save_dir = save_dir
         self.train_save_interval = train_save_interval
         self.val_save_interval = val_save_interval
@@ -98,7 +98,7 @@ def save_as_ply(pred1, pred2, save_path):
 
         return quaternion, scale
 
-    # Collect the Gaussian parameters
+    # Collect the Gaussian parametersnshao baocun pinlv
     means = torch.stack([pred1["means"], pred2["means_in_other_view"]], dim=1)
     covariances = torch.stack([pred1["covariances"], pred2["covariances"]], dim=1)
     harmonics = torch.stack([pred1["sh"], pred2["sh"]], dim=1)[..., 0]  # Only use the first harmonic

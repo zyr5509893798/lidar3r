@@ -61,9 +61,9 @@ class MAST3RGaussians(L.LightningModule):
         # 冻结整个编码器
         self.encoder.requires_grad_(False)
 
-        # 解冻新增的深度融合模块
-        self.encoder.fusion_gate.requires_grad_(True)
-        self.encoder.depth_encoder.requires_grad_(True)
+        # 解冻新增的深度embedding模块
+        self.encoder.patch_embed_depth.requires_grad_(True)
+        # self.encoder.depth_encoder.requires_grad_(True)
 
         # 解冻原始模型中需要训练的部分
         self.encoder.downstream_head1.gaussian_dpt.dpt.requires_grad_(True)
@@ -99,15 +99,16 @@ class MAST3RGaussians(L.LightningModule):
         #     # (shape1, shape2), (feat1, feat2), (pos1, pos2) = self.encoder._encode_symmetrized(view1, view2)
         #     dec1, dec2 = self.encoder._decoder(feat1, pos1, feat2, pos2)
         # 编码
-        (shape1, shape2), (tokens1, tokens2), (pos1, pos2), (depth_feat1, depth_feat2) = self.encoder._encode_symmetrized(view1, view2)
+        # (shape1, shape2), (tokens1, tokens2), (pos1, pos2), (depth_feat1, depth_feat2) = self.encoder._encode_symmetrized(view1, view2)
+        (shape1, shape2), (tokens1, tokens2), (pos1, pos2) = self.encoder._encode_symmetrized(view1, view2)
 
         # 特征融合
-        tokens1_fused = self.encoder._fuse_features(tokens1, shape1, depth_feat1)
-        tokens2_fused = self.encoder._fuse_features(tokens2, shape2, depth_feat2)
+        # tokens1_fused = self.encoder._fuse_features(tokens1, shape1, depth_feat1)
+        # tokens2_fused = self.encoder._fuse_features(tokens2, shape2, depth_feat2)
 
         with torch.no_grad():
             # 解码器处理融合特征
-            dec1, dec2 = self.encoder._decoder(tokens1_fused, pos1, tokens2_fused, pos2)
+            dec1, dec2 = self.encoder._decoder(tokens1, pos1, tokens2, pos2)
 
         # Train the downstream heads
         pred1 = self.encoder._downstream_head(1, [tok.float() for tok in dec1], shape1)
@@ -324,99 +325,112 @@ class MAST3RGaussians(L.LightningModule):
         sync_dist = prefix != 'train'
         self.log_dict(values, prog_bar=prog_bar, sync_dist=sync_dist, batch_size=self.config.data.batch_size)
 
-    # def configure_optimizers(self):
-    #     optimizer = torch.optim.Adam(self.encoder.parameters(), lr=self.config.opt.lr)
-    #     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [self.config.opt.epochs // 2], gamma=0.1)
-    #     return {
-    #         "optimizer": optimizer,
-    #         "lr_scheduler": {
-    #             "scheduler": scheduler,
-    #             "interval": "epoch",
-    #             "frequency": 1,
-    #         },
-    #     }
     def configure_optimizers(self):
-        # 更保守的分组学习率
         param_groups = [
             {
-                'params': list(self.encoder.fusion_gate.parameters()),
-                'lr': self.config.opt.lr * 300,  # 3e-4
+                'params': list(self.encoder.patch_embed_depth.parameters()),
+                'lr': self.config.opt.lr * 30,  # 3e-4
                 'name': 'fusion'
-            },
-            {
-                'params': list(self.encoder.depth_encoder.parameters()),
-                'lr': self.config.opt.lr * 200,  # 2e-4
-                'name': 'depth_enc'
             },
             {
                 'params': list(self.encoder.downstream_head1.parameters()) +
                           list(self.encoder.downstream_head2.parameters()),
-                'lr': self.config.opt.lr* 10,  # 1e-5
+                'lr': self.config.opt.lr,  # 1e-5
                 'name': 'heads'
             }
         ]
         optimizer = torch.optim.Adam(param_groups, lr=self.config.opt.lr)
-        # optimizer = torch.optim.AdamW(
-        #     param_groups,
-        #     lr=self.config.opt.lr,
-        #     weight_decay=self.config.opt.weight_decay,
-        #     betas=(0.9, 0.98),  # 更保守的beta2
-        #     eps=1e-6
-        # )
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [self.config.opt.epochs // 2], gamma=0.1)
-        # 使用阶梯式预热策略
-        # scheduler = torch.optim.lr_scheduler.SequentialLR(
-        #     optimizer,
-        #     schedulers=[
-        #         # 阶段1: 线性预热 (5%的训练步数)
-        #         torch.optim.lr_scheduler.LinearLR(
-        #             optimizer,
-        #             start_factor=0.01,
-        #             end_factor=1.0,
-        #             total_iters=int(0.05 * self.trainer.estimated_stepping_batches)
-        #         ),
-        #         # 阶段2: 保持恒定 (45%的训练步数)
-        #         torch.optim.lr_scheduler.ConstantLR(
-        #             optimizer,
-        #             factor=1.0,
-        #             total_iters=int(0.45 * self.trainer.estimated_stepping_batches)
-        #         ),
-        #         # 阶段3: 余弦衰减 (50%的训练步数)
-        #         torch.optim.lr_scheduler.CosineAnnealingLR(
-        #             optimizer,
-        #             T_max=int(0.5 * self.trainer.estimated_stepping_batches),
-        #             eta_min=self.config.opt.lr * 0.01  # 衰减到1e-7
-        #         )
-        #     ],
-        #     milestones=[
-        #         int(0.05 * self.trainer.estimated_stepping_batches),
-        #         int(0.5 * self.trainer.estimated_stepping_batches)
-        #     ]
-        # )
-
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "interval": "step",
+                "interval": "epoch",
+                "frequency": 1,
             },
         }
+    # def configure_optimizers(self):
+    #     # 更保守的分组学习率
+    #     param_groups = [
+    #         {
+    #             'params': list(self.encoder.fusion_gate.parameters()),
+    #             'lr': self.config.opt.lr * 300,  # 3e-4
+    #             'name': 'fusion'
+    #         },
+    #         {
+    #             'params': list(self.encoder.depth_encoder.parameters()),
+    #             'lr': self.config.opt.lr * 200,  # 2e-4
+    #             'name': 'depth_enc'
+    #         },
+    #         {
+    #             'params': list(self.encoder.downstream_head1.parameters()) +
+    #                       list(self.encoder.downstream_head2.parameters()),
+    #             'lr': self.config.opt.lr* 10,  # 1e-5
+    #             'name': 'heads'
+    #         }
+    #     ]
+    #     optimizer = torch.optim.Adam(param_groups, lr=self.config.opt.lr)
+    #     # optimizer = torch.optim.AdamW(
+    #     #     param_groups,
+    #     #     lr=self.config.opt.lr,
+    #     #     weight_decay=self.config.opt.weight_decay,
+    #     #     betas=(0.9, 0.98),  # 更保守的beta2
+    #     #     eps=1e-6
+    #     # )
+    #     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [self.config.opt.epochs // 2], gamma=0.1)
+    #     # 使用阶梯式预热策略
+    #     # scheduler = torch.optim.lr_scheduler.SequentialLR(
+    #     #     optimizer,
+    #     #     schedulers=[
+    #     #         # 阶段1: 线性预热 (5%的训练步数)
+    #     #         torch.optim.lr_scheduler.LinearLR(
+    #     #             optimizer,
+    #     #             start_factor=0.01,
+    #     #             end_factor=1.0,
+    #     #             total_iters=int(0.05 * self.trainer.estimated_stepping_batches)
+    #     #         ),
+    #     #         # 阶段2: 保持恒定 (45%的训练步数)
+    #     #         torch.optim.lr_scheduler.ConstantLR(
+    #     #             optimizer,
+    #     #             factor=1.0,
+    #     #             total_iters=int(0.45 * self.trainer.estimated_stepping_batches)
+    #     #         ),
+    #     #         # 阶段3: 余弦衰减 (50%的训练步数)
+    #     #         torch.optim.lr_scheduler.CosineAnnealingLR(
+    #     #             optimizer,
+    #     #             T_max=int(0.5 * self.trainer.estimated_stepping_batches),
+    #     #             eta_min=self.config.opt.lr * 0.01  # 衰减到1e-7
+    #     #         )
+    #     #     ],
+    #     #     milestones=[
+    #     #         int(0.05 * self.trainer.estimated_stepping_batches),
+    #     #         int(0.5 * self.trainer.estimated_stepping_batches)
+    #     #     ]
+    #     # )
+    #
+    #     return {
+    #         "optimizer": optimizer,
+    #         "lr_scheduler": {
+    #             "scheduler": scheduler,
+    #             "interval": "step",
+    #         },
+    #     }
 
-    def on_after_backward(self):
-        # 监控新增模块梯度
-        total_norm = 0
-        for name, param in self.encoder.fusion_gate.named_parameters():
-            if param.grad is not None:
-                param_norm = param.grad.detach().data.norm(2)
-                total_norm += param_norm.item() ** 2
-                self.log(f"grads/{name}_norm", param_norm)
-
-        total_norm = total_norm ** 0.5
-        self.log("grads/total_norm", total_norm)
-
-        # 梯度裁剪（动态调整）
-        clip_value = max(0.5, 1 / (total_norm + 1e-8))
-        torch.nn.utils.clip_grad_norm_(self.parameters(), clip_value)
+    # def on_after_backward(self):
+    #     # 监控新增模块梯度
+    #     total_norm = 0
+    #     for name, param in self.encoder.fusion_gate.named_parameters():
+    #         if param.grad is not None:
+    #             param_norm = param.grad.detach().data.norm(2)
+    #             total_norm += param_norm.item() ** 2
+    #             self.log(f"grads/{name}_norm", param_norm)
+    #
+    #     total_norm = total_norm ** 0.5
+    #     self.log("grads/total_norm", total_norm)
+    #
+    #     # 梯度裁剪（动态调整）
+    #     clip_value = max(0.5, 1 / (total_norm + 1e-8))
+    #     torch.nn.utils.clip_grad_norm_(self.parameters(), clip_value)
 
 
 def run_experiment(config):
