@@ -310,7 +310,7 @@ def get_waymo_dataset(root, stage, resolution, num_epochs_per_epoch=1):
         data,
         coverage,
         resolution,
-        num_epochs_per_epoch=num_epochs_per_epoch,
+        # num_epochs_per_epoch=num_epochs_per_epoch,
     )
 
     return dataset
