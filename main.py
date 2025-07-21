@@ -170,21 +170,21 @@ class MAST3RGaussians(L.LightningModule):
         self.log_metrics('train', loss, mse, lpips, depth_loss)
         return loss
 
-    def on_train_batch_start(self, batch, batch_idx):
-        # 记录各参数组学习率
-        for i, pg in enumerate(self.optimizers().param_groups):
-            self.log(f"lr/group_{i}", pg['lr'], prog_bar=(i == 0))
-
-        # 监控新增模块梯度
-        for name, param in self.encoder.fusion_gate.named_parameters():
-            if param.grad is not None:
-                self.log(f"grad_norm/fusion/{name}", param.grad.norm())
-
-    def on_train_epoch_end(self):
-        # 检查新增模块权重变化
-        for name, param in self.encoder.fusion_gate.named_parameters():
-            self.log(f"weight_mean/fusion/{name}", param.data.mean())
-            self.log(f"weight_std/fusion/{name}", param.data.std())
+    # def on_train_batch_start(self, batch, batch_idx):
+    #     # 记录各参数组学习率
+    #     for i, pg in enumerate(self.optimizers().param_groups):
+    #         self.log(f"lr/group_{i}", pg['lr'], prog_bar=(i == 0))
+    #
+    #     # 监控新增模块梯度
+    #     for name, param in self.encoder.fusion_gate.named_parameters():
+    #         if param.grad is not None:
+    #             self.log(f"grad_norm/fusion/{name}", param.grad.norm())
+    #
+    # def on_train_epoch_end(self):
+    #     # 检查新增模块权重变化
+    #     for name, param in self.encoder.fusion_gate.named_parameters():
+    #         self.log(f"weight_mean/fusion/{name}", param.data.mean())
+    #         self.log(f"weight_std/fusion/{name}", param.data.std())
 
     def validation_step(self, batch, batch_idx):
 

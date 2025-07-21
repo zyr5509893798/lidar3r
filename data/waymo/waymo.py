@@ -370,7 +370,7 @@ def depth_to_pseudorgb(depth_map, max_depth=100.0):
     depth_copy = np.copy(depth_map)
 
     # 将无效深度值设为NaN（避免干扰颜色映射）
-    depth_copy[depth_copy <= 0] = np.nan
+    depth_copy[depth_copy <= 0] = 0
 
     # 归一化深度值到[0,1]范围（仅用于颜色映射）
     normalized = np.clip(depth_copy / max_depth, 0, 1)
