@@ -380,6 +380,6 @@ def depth_to_pseudorgb(depth_map, max_depth=100.0):
 
     # 将无效区域设为黑色
     invalid_mask = np.isnan(depth_copy)
-    pseudo_rgb[invalid_mask] = [255, 255, 255]  # BGR白色
+    pseudo_rgb[invalid_mask] = [0, 0, 0]  # BGR黑色
 
     return pseudo_rgb

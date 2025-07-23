@@ -63,7 +63,14 @@ class MAST3RGaussians(L.LightningModule):
 
         # 解冻新增的深度embedding模块
         self.encoder.patch_embed_depth.requires_grad_(True)
-        # self.encoder.depth_encoder.requires_grad_(True)
+
+        # 解冻融合层之前和之后的N层Transformer块
+        for i in range(6):  # 解冻前6层，融合层前的4层，后的2层
+            for param in encoder.enc_blocks[i].parameters():
+                param.requires_grad = True
+
+        # 解冻融合模块
+        encoder.fusion_blocks.requires_grad_(True)
 
         # 解冻原始模型中需要训练的部分
         self.encoder.downstream_head1.gaussian_dpt.dpt.requires_grad_(True)
@@ -325,96 +332,82 @@ class MAST3RGaussians(L.LightningModule):
         sync_dist = prefix != 'train'
         self.log_dict(values, prog_bar=prog_bar, sync_dist=sync_dist, batch_size=self.config.data.batch_size)
 
-    def configure_optimizers(self):
-        param_groups = [
-            {
-                'params': list(self.encoder.patch_embed_depth.parameters()),
-                'lr': self.config.opt.lr * 30,  # 3e-4
-                'name': 'fusion'
-            },
-            {
-                'params': list(self.encoder.downstream_head1.parameters()) +
-                          list(self.encoder.downstream_head2.parameters()),
-                'lr': self.config.opt.lr,  # 1e-5
-                'name': 'heads'
-            }
-        ]
-        optimizer = torch.optim.Adam(param_groups, lr=self.config.opt.lr)
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [self.config.opt.epochs // 2], gamma=0.1)
-        return {
-            "optimizer": optimizer,
-            "lr_scheduler": {
-                "scheduler": scheduler,
-                "interval": "epoch",
-                "frequency": 1,
-            },
-        }
     # def configure_optimizers(self):
-    #     # 更保守的分组学习率
     #     param_groups = [
     #         {
-    #             'params': list(self.encoder.fusion_gate.parameters()),
-    #             'lr': self.config.opt.lr * 300,  # 3e-4
+    #             'params': list(self.encoder.patch_embed_depth.parameters()),
+    #             'lr': self.config.opt.lr * 30,  # 3e-4
     #             'name': 'fusion'
-    #         },
-    #         {
-    #             'params': list(self.encoder.depth_encoder.parameters()),
-    #             'lr': self.config.opt.lr * 200,  # 2e-4
-    #             'name': 'depth_enc'
     #         },
     #         {
     #             'params': list(self.encoder.downstream_head1.parameters()) +
     #                       list(self.encoder.downstream_head2.parameters()),
-    #             'lr': self.config.opt.lr* 10,  # 1e-5
+    #             'lr': self.config.opt.lr,  # 1e-5
     #             'name': 'heads'
     #         }
     #     ]
     #     optimizer = torch.optim.Adam(param_groups, lr=self.config.opt.lr)
-    #     # optimizer = torch.optim.AdamW(
-    #     #     param_groups,
-    #     #     lr=self.config.opt.lr,
-    #     #     weight_decay=self.config.opt.weight_decay,
-    #     #     betas=(0.9, 0.98),  # 更保守的beta2
-    #     #     eps=1e-6
-    #     # )
     #     scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [self.config.opt.epochs // 2], gamma=0.1)
-    #     # 使用阶梯式预热策略
-    #     # scheduler = torch.optim.lr_scheduler.SequentialLR(
-    #     #     optimizer,
-    #     #     schedulers=[
-    #     #         # 阶段1: 线性预热 (5%的训练步数)
-    #     #         torch.optim.lr_scheduler.LinearLR(
-    #     #             optimizer,
-    #     #             start_factor=0.01,
-    #     #             end_factor=1.0,
-    #     #             total_iters=int(0.05 * self.trainer.estimated_stepping_batches)
-    #     #         ),
-    #     #         # 阶段2: 保持恒定 (45%的训练步数)
-    #     #         torch.optim.lr_scheduler.ConstantLR(
-    #     #             optimizer,
-    #     #             factor=1.0,
-    #     #             total_iters=int(0.45 * self.trainer.estimated_stepping_batches)
-    #     #         ),
-    #     #         # 阶段3: 余弦衰减 (50%的训练步数)
-    #     #         torch.optim.lr_scheduler.CosineAnnealingLR(
-    #     #             optimizer,
-    #     #             T_max=int(0.5 * self.trainer.estimated_stepping_batches),
-    #     #             eta_min=self.config.opt.lr * 0.01  # 衰减到1e-7
-    #     #         )
-    #     #     ],
-    #     #     milestones=[
-    #     #         int(0.05 * self.trainer.estimated_stepping_batches),
-    #     #         int(0.5 * self.trainer.estimated_stepping_batches)
-    #     #     ]
-    #     # )
-    #
     #     return {
     #         "optimizer": optimizer,
     #         "lr_scheduler": {
     #             "scheduler": scheduler,
-    #             "interval": "step",
+    #             "interval": "epoch",
+    #             "frequency": 1,
     #         },
     #     }
+    def configure_optimizers(self):
+        # 定义参数组
+        param_groups = []
+
+        # 组1: 深度嵌入和融合模块（高学习率）
+        fusion_params = list(self.encoder.patch_embed_depth.parameters())
+        fusion_params += list(self.encoder.fusion_blocks.parameters())
+        param_groups.append({
+            'params': fusion_params,
+            'lr': self.config.opt.lr * 30,  # 3e-4
+            'name': 'fusion'
+        })
+
+        # 组2: 解冻的编码器层（中等学习率）
+        unfrozen_blocks = []
+        for i in range(6):  # 仅解冻6层
+            unfrozen_blocks.extend(self.encoder.enc_blocks[i].parameters())
+
+        param_groups.append({
+            'params': unfrozen_blocks,
+            'lr': self.config.opt.lr * 3,  # 3e-5
+            'name': 'unfrozen_encoder'
+        })
+
+        # 组3: 下游高斯头（基础学习率）
+        head_params = list(self.encoder.downstream_head1.parameters())
+        head_params += list(self.encoder.downstream_head2.parameters())
+        param_groups.append({
+            'params': head_params,
+            'lr': self.config.opt.lr,  # 1e-5
+            'name': 'heads'
+        })
+
+        optimizer = torch.optim.AdamW(param_groups, lr=self.config.opt.lr)
+
+        # 更精细的学习率调度
+        scheduler = torch.optim.lr_scheduler.OneCycleLR(
+            optimizer,
+            max_lr=[group['lr'] for group in param_groups],
+            total_steps=self.config.opt.epochs * 2800,
+            pct_start=0.3,
+            anneal_strategy='linear'
+        )
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+            },
+        }
+
 
     # def on_after_backward(self):
     #     # 监控新增模块梯度
