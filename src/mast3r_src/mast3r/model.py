@@ -130,7 +130,7 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         self.patch_embed = dust3r_patch_embed(self.patch_embed_cls, img_size, patch_size, enc_embed_dim)
         # 这个get_patch_embed是pow3r实现的，一个用于深度图的方法。
         self.patch_embed_depth = get_patch_embed(self.patch_embed_cls + '_Mlp', img_size, patch_size, enc_embed_dim,
-                                                 in_chans=3)
+                                                 in_chans=1)
         # 保存关键尺寸信息
         self.patch_size = patch_size
         self.img_size = img_size
@@ -187,9 +187,11 @@ class AsymmetricMASt3R(AsymmetricCroCo3DStereo):
         shape2 = view2.get('true_shape', torch.tensor(img2.shape[-2:])[None].repeat(B, 1))
 
         # 准备深度输入
-        depth1 = view1.get('depth', None)
-        depth2 = view2.get('depth', None)
+        depth1 = view1.get('depthmap', None)
+        depth2 = view2.get('depthmap', None)
 
+        depth1 = depth1.unsqueeze(1)
+        depth2 = depth2.unsqueeze(1)
         # 编码图像
         # tokens1, pos1, depth_feat1 = self._encode_image(img1, shape1, depth=depth1)
         # tokens2, pos2, depth_feat2 = self._encode_image(img2, shape2, depth=depth2)

@@ -66,11 +66,11 @@ class MAST3RGaussians(L.LightningModule):
 
         # 解冻融合层之前和之后的N层Transformer块
         for i in range(6):  # 解冻前6层，融合层前的4层，后的2层
-            for param in encoder.enc_blocks[i].parameters():
+            for param in self.encoder.enc_blocks[i].parameters():
                 param.requires_grad = True
 
         # 解冻融合模块
-        encoder.fusion_blocks.requires_grad_(True)
+        self.encoder.fusion_blocks.requires_grad_(True)
 
         # 解冻原始模型中需要训练的部分
         self.encoder.downstream_head1.gaussian_dpt.dpt.requires_grad_(True)
@@ -392,19 +392,21 @@ class MAST3RGaussians(L.LightningModule):
         optimizer = torch.optim.AdamW(param_groups, lr=self.config.opt.lr)
 
         # 更精细的学习率调度
-        scheduler = torch.optim.lr_scheduler.OneCycleLR(
-            optimizer,
-            max_lr=[group['lr'] for group in param_groups],
-            total_steps=self.config.opt.epochs * 2800,
-            pct_start=0.3,
-            anneal_strategy='linear'
-        )
+        # scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        #     optimizer,
+        #     max_lr=[group['lr'] for group in param_groups],
+        #     total_steps=self.config.opt.epochs * 2800,
+        #     pct_start=0.3,
+        #     anneal_strategy='linear'
+        # )
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [self.config.opt.epochs // 2], gamma=0.1)
 
         return {
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "interval": "step",
+                "interval": "epoch",
+                "frequency": 1
             },
         }
 
